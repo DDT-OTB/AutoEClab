@@ -141,7 +141,7 @@ class ApiTests(unittest.TestCase):
         code, saved = self.request("POST", "/api/experiments", {
             "sequence": self.sequence, "expected_version": original["version"]})
         self.assertEqual(code, 200)
-        backups = list((self.root / "data/backups").glob("*/*.json"))
+        backups = list((self.root / "data/backups").glob("*/" + name + ".json"))
         self.assertEqual(json.loads(backups[0].read_text()), old)
 
     def test_invalid_fluid_and_wrong_route_are_rejected(self):

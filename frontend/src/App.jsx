@@ -16,6 +16,8 @@ import FlowStep, { ActionIcon } from './FlowStep.jsx';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
+import ExperimentManager from './ExperimentManager.jsx';
+import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
 const emptyDraft = () => ({
   schema_version: 2, id: 'new_experiment', description: 'New pump experiment',
@@ -45,6 +47,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const { status, accept: acceptStatus, streaming, fresh } = useLiveStatus(api);
   const [health, setHealth] = useState(null);
   const [catalog, setCatalog] = useState([]);
+  const catalogRequest = useRef(0);
   const [runs, setRuns] = useState([]);
   const [draft, setDraft] = useState(emptyDraft);
   const [base, setBase] = useState({ id: null, version: null });
@@ -63,9 +66,12 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [importText, setImportText] = useState('');
   const [dragIndex, setDragIndex] = useState(null);
   const [activeNav, setActiveNav] = useState('editor');
+  const previousNav = useRef('editor');
   const historyRef = useRef(null);
   const editorRef = useRef(null);
   const inspectorRef = useRef(null);
+  const editorSnapshot = useRef({draft,base,dirty});
+  editorSnapshot.current={draft,base,dirty};
   const sequence = useMemo(() => toSequence(draft), [draft]);
   const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
   const jsonText = useMemo(() => JSON.stringify(sequence, null, 2), [sequence]);
@@ -112,7 +118,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     finally { refreshLock.current = false; setRefreshing(false); }
   }
   async function loadExperiment(id, force = false) {
-    if (!force && dirty && !window.confirm('切换方案会放弃尚未保存的修改，是否继续？')) return;
+    if (!force && dirty && !window.confirm('切换方案会放弃尚未保存的修改，是否继续？')) return false;
     setBusy('load'); setError('');
     try {
       const data = await api.experiment(id);
@@ -120,16 +126,35 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       setDraft(value); setBase({ id, version: data.version }); setDirty(false);
       setSelected(value.steps[0]?._key || null); setPlan(null);
       setRightTab('parameters');
-    } catch (failure) { setError(failure.message); }
+      return true;
+    } catch (failure) { setError(failure.message); return false; }
     finally { setBusy(''); }
+  }
+  async function reloadCatalog() {
+    const request=++catalogRequest.current;
+    const result=await api.experiments();
+    if(request===catalogRequest.current) setCatalog(result.experiments);
+    return result.experiments;
+  }
+  async function openManagedExperiment(id) {
+    if(await loadExperiment(id)) setActiveNav('editor');
+  }
+  function fileChanged(kind,result) {
+    const before=editorSnapshot.current;
+    const next=editorAfterFileChange(before,kind,result);
+    if(next.draft!==before.draft) setDraft(next.draft);
+    if(next.base!==before.base) setBase(next.base);
+    if(next.dirty!==before.dirty) setDirty(next.dirty);
+    if(next.base!==before.base) setPlan(null);
   }
   useEffect(() => {
     (async () => {
       try {
-        const [items, list] = await Promise.all([api.templates(), api.experiments()]);
-        setTemplates(items.templates); setMeasurementTemplates(items.measurement_templates || {}); setCatalog(list.experiments);
-        const id = list.experiments.some(item => item.id === 'demo_rinse_with_predrain')
-          ? 'demo_rinse_with_predrain' : list.experiments[0]?.id;
+        const [items, list] = await Promise.all([api.templates(), reloadCatalog()]);
+        setTemplates(items.templates); setMeasurementTemplates(items.measurement_templates || {});
+        const editable=list.filter(item=>item.editable!==false);
+        const id = editable.some(item => item.id === 'demo_rinse_with_predrain')
+          ? 'demo_rinse_with_predrain' : editable[0]?.id;
         if (id) await loadExperiment(id, true);
         await refresh();
       } catch (failure) { setError(failure.message); }
@@ -137,6 +162,15 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(()=>{
+    if(previousNav.current===activeNav) return;
+    previousNav.current=activeNav;
+    if(activeNav==='experiments') window.scrollTo({top:0,behavior:'smooth'});
+    if(activeNav==='editor' || activeNav==='history') {
+      const frame=requestAnimationFrame(()=>{(activeNav==='history'?historyRef:editorRef).current?.scrollIntoView({behavior:'smooth',block:'start'});});
+      return ()=>cancelAnimationFrame(frame);
+    }
+  },[activeNav]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(''), 4500);
@@ -196,7 +230,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     try {
       const data = await api.save(sequence, base.id === sequence.id ? base.version : undefined);
       setBase({ id: sequence.id, version: data.version }); setDirty(latestJson.current !== submittedJson);
-      setCatalog((await api.experiments()).experiments);
+      await reloadCatalog();
       setNotice(latestJson.current !== submittedJson ? '已保存提交的版本；后续参数修改仍未保存。' : '已保存 ' + data.filename + ' 和同名说明文档。');
     } catch (failure) { setError(failure.message); }
     finally { setBusy(''); }
@@ -208,19 +242,28 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     URL.revokeObjectURL(url);
   }
   function createNew() {
-    if (dirty && !window.confirm('新建方案会放弃尚未保存的修改，是否继续？')) return;
-    setDraft(emptyDraft()); setBase({ id: null, version: null }); setDirty(true);
+    if (dirty && !window.confirm('新建方案会放弃尚未保存的修改，是否继续？')) return false;
+    setDraft({...emptyDraft(),id:uniqueExperimentId('new_experiment',catalog)}); setBase({ id: null, version: null }); setDirty(true);
     setPlan(null); setSelected(null); setError('');
-    setRightTab('parameters');
+    setRightTab('parameters');setActiveNav('editor');setModal(null);return true;
+  }
+  async function importFile(event) {
+    const file=event.target.files?.[0];
+    if(!file) return;
+    if(file.size>262144) {setError('导入文件不能超过 256 KB。');event.target.value='';return;}
+    try {setImportText(await file.text());}
+    catch(failure) {setError('读取文件失败：'+failure.message);}
+    event.target.value='';
   }
   function importSequence() {
     try {
       const value = JSON.parse(importText);
       if (value.schema_version !== 2 || !Array.isArray(value.steps)) throw new Error('需要 schema_version=2 的实验序列。');
+      if(dirty && !window.confirm('导入方案会替换尚未保存的编排内容，是否继续？')) return;
       const editor = toEditor(value);
       setDraft(editor); setBase({ id: null, version: null }); setDirty(true);
       setPlan(null); setSelected(editor.steps[0]?._key); setModal(null); setError('');
-      setRightTab('parameters');
+      setRightTab('parameters');setActiveNav('editor');
     } catch (failure) { setError('导入失败：' + failure.message); }
   }
 
@@ -229,11 +272,11 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       <a className="brand" href="/" aria-label="Pump Console 首页"><span className="brand-mark"><Workflow size={23} /></span><span>Pump Console<small>LABORATORY WORKSPACE</small></span></a>
       <div className="workspace-label">WORKSPACE</div>
       <nav aria-label="主导航">
-        <button className={activeNav === 'editor' ? 'nav-active' : ''} onClick={() => { setActiveNav('editor'); editorRef.current?.scrollIntoView({ behavior: 'smooth' }); }}><LayoutDashboard size={18} /><span>实验控制台</span></button>
-        <button className={activeNav === 'experiments' ? 'nav-active' : ''} onClick={() => { setActiveNav('experiments'); setModal('experiments'); }}><FolderOpen size={18} /><span>实验方案</span><em>{catalog.length}</em></button>
+        <button className={activeNav === 'editor' ? 'nav-active' : ''} onClick={() => {if(activeNav==='editor') editorRef.current?.scrollIntoView({behavior:'smooth'});else setActiveNav('editor');}}><LayoutDashboard size={18} /><span>实验控制台</span></button>
+        <button className={activeNav === 'experiments' ? 'nav-active' : ''} onClick={() => { setActiveNav('experiments'); setModal(null); }}><FolderOpen size={18} /><span>实验方案</span><em>{catalog.length}</em></button>
         <button onClick={() => setModal('templates')}><Settings2 size={18} /><span>设备模板</span></button>
         {user?.role==='admin' && <button onClick={()=>setModal('accounts')}><Users size={18}/><span>账号管理</span></button>}
-        <button onClick={() => { setActiveNav('history'); historyRef.current?.scrollIntoView({ behavior: 'smooth' }); }}><History size={18} /><span>运行记录</span></button>
+        <button onClick={() => {if(activeNav==='history') historyRef.current?.scrollIntoView({behavior:'smooth'});else setActiveNav('history');}}><History size={18} /><span>运行记录</span></button>
       </nav>
       <div className="sidebar-note"><ShieldCheck size={19} /><strong>配置工作模式</strong><p>编辑、校验与保存方案<br />硬件执行尚未启用</p></div>
       <button className="connection-tile" onClick={() => setModal('connection')}><span className={'status-dot ' + (connected ? 'green' : 'red')} /><span>{connected ? '后端已连接' : '等待后端连接'}<small>Lab server</small></span><ChevronRight size={15} /></button>
@@ -241,16 +284,17 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     </aside>
     <main className="main-area">
       <header className="topbar">
-        <div><div className="breadcrumb">Workspace <ChevronRight size={12} /><span>实验控制台</span></div><h1>让实验流程，一目了然<span>配置与监测工作台</span></h1></div>
+        <div><div className="breadcrumb">Workspace <ChevronRight size={12} /><span>{activeNav==='experiments'?'实验方案':'实验控制台'}</span></div><h1>{activeNav==='experiments'?'每一份方案，有序管理':'让实验流程，一目了然'}<span>{activeNav==='experiments'?'实验方案文件管理':'配置与监测工作台'}</span></h1></div>
         <div className="top-actions">{user?.role==="admin" && <button className="outline-button campus-account-shortcut" onClick={()=>setModal("accounts")}><Users size={14}/>账号管理</button>}<span className="account-label"><ShieldCheck size={14} />{user?.username}<small>{user?.role === 'viewer' ? '只读' : '管理员'}</small></span><button className="subtle-button account-password-button" onClick={onChangePassword}>修改密码</button><button className="outline-button logout-button" onClick={onLogout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button><span className="mode-badge"><LockKeyhole size={13} />硬件执行已锁定</span><button className="outline-button refresh-all-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress} aria-busy={refreshing || !!status.device_scan?.in_progress}><RefreshCw size={16} className={refreshing || status.device_scan?.in_progress ? 'refresh-spinning' : ''} />{refreshing || status.device_scan?.in_progress ? '正在刷新…' : user?.role === 'viewer' ? '更新状态显示' : '刷新全部状态'}</button><button className="subtle-button" onClick={() => setModal('connection')}><Link2 size={15} />连接详情</button></div>
       </header>
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
+        {activeNav==='experiments' ? <ExperimentManager items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setActiveNav('editor')} onChanged={fileChanged}/> : <>
         <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
         <LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names} />
 
         <section className="experiment-section" ref={editorRef}>
-          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.steps.length} 步</span></h2></div><div className="builder-actions"><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
+          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.steps.length} 步</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setActiveNav('experiments')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
           <div className="experiment-form">
             <label className="scheme-select"><span>加载已有方案</span><div className="select-wrap"><select value={base.id || ''} onChange={event => loadExperiment(event.target.value)} aria-label="加载已有方案"><option value="" disabled>选择实验方案</option>{catalog.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select><ChevronDown size={15} /></div></label>
             <label><span>方案 ID <em>英文文件名</em></span><input value={draft.id} onChange={event => change({ id: event.target.value })} aria-label="方案 ID" spellCheck={false} /></label>
@@ -302,16 +346,16 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
           <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="subtle-button" onClick={download}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !draft.steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !draft.steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
         </section>
         <section className="history-section" ref={historyRef}><div className="section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>最近运行记录</h2></div><span className="history-note">读取原有实验日志 · 不会启动设备</span></div><div className="history-table"><div className="history-row history-table-head"><span>实验方案</span><span>开始时间</span><span>完成步骤</span><span>结果</span></div>{runs.slice(0, 5).map(run => <button className="history-row" key={run.id} onClick={() => setModal({ run })}><span><FileJson size={16} />{run.sequence_id}</span><span>{timeText(run.started_at)}</span><span>{run.completed_steps} 步</span><span className={'run-tag ' + run.state}>{run.state === 'completed' ? '已完成' : run.state === 'aborted' ? '已中止' : '待确认'}<ChevronRight size={13} /></span></button>)}{!runs.length && <div className="empty-history">暂无可读取的历史运行记录</div>}</div></section>
+        </>}
         <footer className="page-footer"><span>Pump Console <span>·</span> 配置工作台</span><span>连接{connected ? '正常' : '待恢复'} {latency !== null && ('· ' + latency + ' ms')} <span>·</span> JSON 使用英文</span></footer>
       </div>
     </main>
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
-    {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : modal === 'experiments' ? '已保存实验方案' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
-      {modal === 'import' ? <><p className="modal-description">粘贴英文配置 JSON，载入后可继续图形化编辑。</p><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder='{"schema_version":2,"id":"my_experiment","description":"...","steps":[]}' aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>载入编辑器<ArrowUpRight size={15} /></button></> :
+    {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
+      {modal === 'import' ? <><p className="modal-description">选择本机 JSON 文件，或粘贴英文配置，载入后可继续编排。</p><label className="file-import-input"><FileJson size={16}/><span>选择方案文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label="选择实验方案 JSON 文件"/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder='{"schema_version":2,"id":"my_experiment","description":"...","steps":[]}' aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>载入编辑器<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>配置 / 离线预览</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>启动、停止、初始化及移动均禁用</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :
         modal === 'templates' ? <div className="template-grid">{Object.entries(actionTemplates).map(([id, template]) => <article key={id}><h3>{names[id] || id}</h3><small>{id==='electrochemical_station' ? 'action_templates/cyclic_voltammetry.json' : id+'.json'}</small><pre>{JSON.stringify(template, null, 2)}</pre></article>)}</div> :
-        modal === 'experiments' ? <div className="experiment-list">{catalog.map(item => <button key={item.id} onClick={() => { loadExperiment(item.id); setModal(null); }}><FileJson size={20} /><span><strong>{item.id}</strong><small>{item.step_count} 步 · {timeText(item.modified_at)}</small></span><ChevronRight size={17} /></button>)}</div> :
         <><div className="modal-description">{modal.run?.sequence_id} · {modal.run?.completed_steps} 步完成</div><div className="run-events">{modal.run?.events.filter(item => ['step_started', 'step_completed', 'sequence_aborted', 'sequence_completed'].includes(item.event)).map((item, index) => <div key={index}><span className="status-dot gray" /><span>{timeText(item.time)}</span><strong>{item.event === 'step_started' ? item.step.description : item.event === 'step_completed' ? item.id + ' 已完成' : item.message || item.event}</strong></div>)}</div></>}
     </section></div>}
   </div>;

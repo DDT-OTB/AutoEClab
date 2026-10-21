@@ -130,7 +130,10 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     if path == "/api/experiments":
                         return self.json_response(200, {"experiments": repository.list_experiments()})
                     if path.startswith("/api/experiments/"):
-                        return self.json_response(200, repository.get_experiment(path.removeprefix("/api/experiments/")))
+                        name = path.removeprefix("/api/experiments/")
+                        if name.endswith("/content"):
+                            return self.json_response(200, repository.experiment_content(name.removesuffix("/content")))
+                        return self.json_response(200, repository.get_experiment(name))
                     if path == "/api/runs":
                         return self.json_response(200, {"runs": repository.runs()})
                     if path == "/api/admin/users":
@@ -236,6 +239,18 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     with auth.db() as db:
                         auth.audit(db, "device_status_" + result["scan"]["state"], session["user"]["username"], self.request_peer)
                     return self.json_response(200, result)
+                if path.startswith("/api/experiments/"):
+                    parts = path.removeprefix("/api/experiments/").split("/")
+                    if len(parts) == 2 and parts[1] in ("rename", "duplicate"):
+                        self.require_admin(session)
+                        payload = self.body(8192)
+                        if not isinstance(payload, dict) or set(payload) != {"new_id", "expected_version"}:
+                            raise ApiError(400, "Expected a new ID and the current file version")
+                        auth.session(token, touch=True)
+                        result = repository.rename_experiment(parts[0], payload["new_id"], payload["expected_version"], duplicate=parts[1] == "duplicate")
+                        with auth.db() as db:
+                            auth.audit(db, "experiment_" + parts[1] + "/" + parts[0], session["user"]["username"], self.request_peer)
+                        return self.json_response(200, result)
                 if any(value in path for value in ("/execute", "/command", "/probe", "/initialize", "/stop")):
                     raise ApiError(403, "Hardware execution and serial commands are disabled.", "hardware_disabled")
                 if path not in ("/api/preview", "/api/experiments"):
@@ -248,7 +263,10 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     raise ApiError(400, "Expected a sequence object and optional expected_version")
                 if path == "/api/preview":
                     return self.json_response(200, repository.preview(payload.get("sequence")))
-                return self.json_response(200, repository.save_experiment(payload.get("sequence"), payload.get("expected_version")))
+                result = repository.save_experiment(payload.get("sequence"), payload.get("expected_version"))
+                with auth.db() as db:
+                    auth.audit(db, "experiment_saved/" + result["id"], session["user"]["username"], self.request_peer)
+                return self.json_response(200, result)
             except ApiError as error:
                 self.failure(error)
             except (OSError, ValueError, sqlite3.Error):
@@ -257,10 +275,26 @@ def make_server(host, port, repository, static_root, auth, access=None):
         def do_DELETE(self):
             try:
                 self.guard(mutating=True)
-                auth.session(self.session_token())
-                raise ApiError(405, "Deletion is not enabled", "method_not_allowed")
+                token = self.session_token()
+                session = auth.session(token)
+                auth.csrf(session, self.headers.get("X-CSRF-Token"))
+                path = unquote(urlsplit(self.path).path)
+                if not path.startswith("/api/experiments/"):
+                    raise ApiError(405, "Deletion is not enabled for this resource", "method_not_allowed")
+                self.require_admin(session)
+                payload = self.body(8192)
+                if not isinstance(payload, dict) or set(payload) != {"expected_version"}:
+                    raise ApiError(400, "Expected the current file version")
+                auth.session(token, touch=True)
+                name = path.removeprefix("/api/experiments/")
+                result = repository.delete_experiment(name, payload["expected_version"])
+                with auth.db() as db:
+                    auth.audit(db, "experiment_deleted/" + name, session["user"]["username"], self.request_peer)
+                self.json_response(200, result)
             except ApiError as error:
                 self.failure(error)
+            except (OSError, ValueError, sqlite3.Error):
+                self.json_response(500, {"error": "server_error", "message": "文件操作失败，原文件已保留或备份，请刷新后检查。"})
 
     return ThreadingHTTPServer((host, port), Handler)
 

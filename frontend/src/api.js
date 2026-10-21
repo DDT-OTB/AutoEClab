@@ -44,6 +44,16 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     refreshStatus: () => request('/api/status/refresh', { method: 'POST', body: '{}', signal: AbortSignal.timeout(15000) }),
     experiments: () => request('/api/experiments'),
     experiment: id => request('/api/experiments/' + encodeURIComponent(id)),
+    experimentContent: id => request('/api/experiments/' + encodeURIComponent(id) + '/content'),
+    renameExperiment: (id, new_id, expected_version) => request('/api/experiments/' + encodeURIComponent(id) + '/rename', {
+      method: 'POST', body: JSON.stringify({ new_id, expected_version }),
+    }),
+    duplicateExperiment: (id, new_id, expected_version) => request('/api/experiments/' + encodeURIComponent(id) + '/duplicate', {
+      method: 'POST', body: JSON.stringify({ new_id, expected_version }),
+    }),
+    deleteExperiment: (id, expected_version) => request('/api/experiments/' + encodeURIComponent(id), {
+      method: 'DELETE', body: JSON.stringify({ expected_version }),
+    }),
     runs: () => request('/api/runs'),
     preview: sequence => request('/api/preview', { method: 'POST', body: JSON.stringify({ sequence }) }),
     save: (sequence, version) => request('/api/experiments', {

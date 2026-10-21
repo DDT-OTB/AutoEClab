@@ -117,6 +117,20 @@ def main():
             assert not session["user"]["must_change_password"]
             code, status, _ = request("GET", "/api/status", cookie=viewer)
             assert code == 200 and status["motion_commands_sent"] == 0 and status["serial_commands_sent"] == 0
+            _, catalog, _ = request("GET", "/api/experiments", cookie=admin)
+            source = next(item for item in catalog["experiments"] if item["id"] == "demo_rinse_with_predrain")
+            code, copied, _ = request("POST", "/api/experiments/" + source["id"] + "/duplicate", {"new_id": "qa_file_copy", "expected_version": source["version"]}, admin, admin_csrf)
+            assert code == 200 and copied["copied"]
+            code, renamed, _ = request("POST", "/api/experiments/qa_file_copy/rename", {"new_id": "qa_file_renamed", "expected_version": copied["version"]}, admin, admin_csrf)
+            assert code == 200 and renamed["renamed"]
+            code, content, _ = request("GET", "/api/experiments/qa_file_renamed/content", cookie=viewer)
+            assert code == 200 and json.loads(content["content"])["id"] == "qa_file_renamed"
+            assert request("DELETE", "/api/experiments/qa_file_renamed", {"expected_version": renamed["version"]}, viewer, viewer_csrf)[0] == 403
+            assert request("POST", "/api/experiments/qa_file_renamed/rename", {"new_id": "stale_name", "expected_version": source["version"]}, admin, admin_csrf)[0] == 409
+            code, deleted, _ = request("DELETE", "/api/experiments/qa_file_renamed", {"expected_version": renamed["version"]}, admin, admin_csrf)
+            assert code == 200 and deleted["deleted"]
+            assert (directory / "data/backups" / deleted["backup_id"] / "qa_file_renamed.json").is_file()
+            assert request("GET", "/api/experiments/qa_file_renamed/content", cookie=admin)[0] == 404
             assert request("GET", "/api/admin/users", cookie=viewer)[0] == 403
             assert request("POST", "/api/admin/users", {"username": "forged_admin", "password": viewer_password, "role": "admin"}, viewer, viewer_csrf)[0] == 403
             assert request("POST", "/api/admin/users/reset-password", {"username": "qa_viewer", "password": reset_password}, admin, admin_csrf)[0] == 200
@@ -140,6 +154,7 @@ def main():
             assert peers and set(peers) == {"127.0.0.1"}
             print(json.dumps({"isolated_tls_nginx": "passed", "secure_cookie": True, "administrator_provisioning": True,
                 "viewer_denied": True, "registration_disabled": True, "reset_revokes_sessions": True,
+                "experiment_files_crud": True, "file_versions_and_backups": True,
                 "sse_frames": len(frames), "sse_interval_seconds": round(observed[1] - observed[0], 3),
                 "proxy_replaces_forged_client_ip": True, "production_accounts_modified": False,
                 "device_queries_sent": 0, "motion_commands_sent": 0}))

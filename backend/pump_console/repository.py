@@ -55,7 +55,7 @@ class LabRepository:
         self.sequences_dir = self.root / "config/sequences"
         self.logs_dir = self.root / "logs/automation"
         self.data_root = Path(data_root)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.monitoring = {"push_interval_seconds": 1, "stale_after_seconds": 15, **(monitoring or {})}
         self.runtime = RuntimeMonitor(self.logs_dir, self.monitoring["stale_after_seconds"])
         self.device_status = StatusRefresh(self.root, device_status)
@@ -70,7 +70,7 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.6.0",
+            "ok": True, "service": "pump-console", "version": "0.7.0",
             "mode": "configuration", "hardware_execution_enabled": False,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
@@ -105,52 +105,185 @@ class LabRepository:
 
     def _sequence_path(self, name):
         path = self.sequences_dir / (identifier(name) + ".json")
-        if not path.resolve().is_relative_to(self.sequences_dir.resolve()):
+        if path.is_symlink() or path.resolve().parent != self.sequences_dir.resolve():
             raise ApiError(400, "Invalid sequence path")
         return path
 
-    def get_experiment(self, name):
+    def _description_path(self, path):
+        companion = path.with_suffix(".md")
+        if (companion.is_symlink() or companion.resolve().parent != self.sequences_dir.resolve() or
+                (companion.exists() and not companion.is_file())):
+            raise ApiError(400, "说明文档路径不安全，未修改文件。", "invalid_description_path")
+        return companion
+
+    def _experiment_snapshot(self, name):
         path = self._sequence_path(name)
         if not path.is_file():
             raise ApiError(404, "实验方案不存在。", "not_found")
         raw = path.read_bytes()
-        return {"sequence": parse_json(raw), "version": hashlib.sha256(raw).hexdigest(),
-                "filename": path.name, "modified_at": datetime.fromtimestamp(
-                    path.stat().st_mtime, timezone.utc).isoformat()}
+        sequence, issue = None, None
+        try:
+            sequence = parse_json(raw)
+            if not isinstance(sequence, dict):
+                issue = "方案内容需要是 JSON 对象。"
+        except ApiError:
+            issue = "文件不是有效的 JSON，可查看内容或下载后修复。"
+        steps = sequence.get("steps") if isinstance(sequence, dict) else None
+        schema = sequence.get("schema_version") if isinstance(sequence, dict) else None
+        editable = type(schema) is int and schema == 2 and isinstance(steps, list) and all(isinstance(step, dict) for step in steps)
+        if issue is None and not editable:
+            issue = "此文件不是可编辑的 schema_version=2 实验方案。"
+        description = sequence.get("description", "") if isinstance(sequence, dict) else ""
+        companion = path.with_suffix(".md")
+        record = {"id": name, "filename": path.name,
+                  "description": description if isinstance(description, str) else "",
+                  "step_count": len(steps) if isinstance(steps, list) else 0,
+                  "modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+                  "size_bytes": len(raw), "version": hashlib.sha256(raw).hexdigest(),
+                  "schema_version": schema if type(schema) is int else None,
+                  "editable": editable, "file_error": issue,
+                  "has_markdown": companion.is_file() and not companion.is_symlink(),
+                  "contains_measurement": isinstance(steps, list) and any(is_measurement(step) for step in steps if isinstance(step, dict))}
+        return path, raw, sequence, record
+
+    def get_experiment(self, name):
+        with self.lock:
+            _, raw, sequence, record = self._experiment_snapshot(name)
+            if not isinstance(sequence, dict):
+                parse_json(raw)
+                raise ApiError(422, "方案内容需要是 JSON 对象。", "invalid_sequence")
+            return {**record, "sequence": sequence}
+
+    def experiment_content(self, name):
+        with self.lock:
+            _, raw, _, record = self._experiment_snapshot(name)
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeError:
+                raise ApiError(422, "文件不是 UTF-8 文本，无法预览。", "invalid_encoding")
+            return {**record, "content": content}
 
     def list_experiments(self):
-        records = []
-        for path in sorted(self.sequences_dir.glob("*.json")):
-            try:
-                record = self.get_experiment(path.stem)
-                sequence = record["sequence"]
-                records.append({
-                    "id": path.stem, "description": sequence.get("description", ""),
-                    "step_count": len(sequence.get("steps", [])),
-                    "modified_at": record["modified_at"], "version": record["version"]})
-            except (ApiError, OSError, AttributeError):
-                continue
-        return records
+        with self.lock:
+            records = []
+            for path in sorted(self.sequences_dir.glob("*.json")):
+                try:
+                    records.append(self._experiment_snapshot(path.stem)[3])
+                except (ApiError, OSError):
+                    continue
+            return records
+
+    @staticmethod
+    def _require_version(record, expected_version):
+        if expected_version != record["version"]:
+            raise ApiError(409, "方案已被修改，请刷新列表并检查最新内容后重试。", "version_conflict")
+
+    def _require_unused(self, name):
+        runtime = self.runtime.snapshot()
+        if runtime.get("controller_alive") is True and runtime.get("sequence_id") in (name, None):
+            raise ApiError(409, "控制程序正在使用此方案，运行结束后才能修改文件。", "experiment_in_use")
+
+    def _require_new_target(self, path):
+        companion = self._description_path(path)
+        if path.exists() or companion.exists():
+            raise ApiError(409, "目标文件名已存在，请选择其他方案 ID。", "name_conflict")
+        self._require_unused(path.stem)
+        return companion
+
+    def _backup_experiment(self, path, action, target=None):
+        companion = self._description_path(path)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        folder = self.data_root / "backups"
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup = folder / stamp
+        backup.mkdir(mode=0o700)
+        shutil.copy2(path, backup / path.name)
+        if companion.exists():
+            shutil.copy2(companion, backup / companion.name)
+        metadata = {"action": action, "source": path.stem, "target": target, "created_at": utc_now()}
+        self._atomic_write(backup / "operation.meta.json", (json.dumps(metadata, indent=2) + "\n").encode())
+        return stamp
+
+    def _apply_files(self, changes):
+        original = {path: path.read_bytes() if path.exists() else None for path in changes}
+        attempted = []
+        try:
+            for path, data in changes.items():
+                attempted.append(path)
+                if data is None:
+                    if path.exists():
+                        path.unlink()
+                else:
+                    self._atomic_write(path, data)
+        except OSError:
+            for path in reversed(attempted):
+                if original[path] is None:
+                    if path.exists():
+                        path.unlink()
+                else:
+                    self._atomic_write(path, original[path])
+            raise
 
     def save_experiment(self, sequence, expected_version=None):
         preview = self.preview(sequence)
         path = self._sequence_path(sequence["id"])
         with self.lock:
+            self._require_unused(path.stem)
+            companion = self._description_path(path)
+            backup_id = None
             if path.exists():
-                current = hashlib.sha256(path.read_bytes()).hexdigest()
-                if expected_version != current:
-                    raise ApiError(409, "方案已存在或被修改，请重新加载，或使用新的方案 ID 另存。", "version_conflict")
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-                backup = self.data_root / "backups" / stamp
-                backup.mkdir(parents=True, exist_ok=False)
-                shutil.copy2(path, backup / path.name)
-                if path.with_suffix(".md").exists():
-                    shutil.copy2(path.with_suffix(".md"), backup / path.with_suffix(".md").name)
+                self._require_version(self._experiment_snapshot(path.stem)[3], expected_version)
+                backup_id = self._backup_experiment(path, "save")
+            else:
+                if expected_version is not None:
+                    raise ApiError(409, "原方案已被删除或重命名，请检查最新文件后另存。", "version_conflict")
+                self._require_new_target(path)
             raw = (json.dumps(sequence, ensure_ascii=False, indent=2) + "\n").encode()
-            self._atomic_write(path, raw)
-            self._write_description(path.with_suffix(".md"), sequence, preview)
-        record = self.get_experiment(sequence["id"])
-        return {**record, "saved": True, "plan": preview["plan"], "hardware_executed": False}
+            description = self._description_bytes(companion, sequence, preview)
+            self._apply_files({path: raw, companion: description})
+            record = self.get_experiment(sequence["id"])
+            return {**record, "saved": True, "backup_id": backup_id, "plan": preview["plan"], "hardware_executed": False}
+
+    def rename_experiment(self, name, new_id, expected_version, duplicate=False):
+        target = self._sequence_path(new_id)
+        if name == new_id:
+            raise ApiError(400, "请填写不同的新方案 ID。", "same_name")
+        with self.lock:
+            path, _, sequence, record = self._experiment_snapshot(name)
+            self._require_version(record, expected_version)
+            if not record["editable"]:
+                raise ApiError(422, "此文件需要先修复格式，再重命名或复制。", "invalid_sequence")
+            if not duplicate:
+                self._require_unused(name)
+            companion = self._description_path(path)
+            target_description = self._require_new_target(target)
+            renamed = {**sequence, "id": new_id}
+            preview = self.preview(renamed)
+            existing = companion.read_text() if companion.exists() else ""
+            existing = re.sub(r"\A# " + re.escape(name) + r"(?=\r?\n|$)", "# " + new_id, existing, count=1)
+            description = self._description_bytes(target_description, renamed, preview, existing=existing)
+            backup_id = self._backup_experiment(path, "duplicate" if duplicate else "rename", new_id)
+            changes = {target: (json.dumps(renamed, ensure_ascii=False, indent=2) + "\n").encode(), target_description: description}
+            if not duplicate:
+                changes[path] = None
+                if companion.exists():
+                    changes[companion] = None
+            self._apply_files(changes)
+            return {**self.get_experiment(new_id), "copied": duplicate, "renamed": not duplicate,
+                    "previous_id": name, "backup_id": backup_id, "hardware_executed": False}
+
+    def delete_experiment(self, name, expected_version):
+        with self.lock:
+            path, _, _, record = self._experiment_snapshot(name)
+            self._require_version(record, expected_version)
+            self._require_unused(name)
+            companion = self._description_path(path)
+            backup_id = self._backup_experiment(path, "delete")
+            changes = {path: None}
+            if companion.exists():
+                changes[companion] = None
+            self._apply_files(changes)
+            return {"deleted": True, "id": name, "backup_id": backup_id, "hardware_executed": False}
 
     @staticmethod
     def _atomic_write(path, data):
@@ -167,7 +300,7 @@ class LabRepository:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def _write_description(self, path, sequence, preview):
+    def _description_bytes(self, path, sequence, preview, existing=None):
         start, end = "<!-- pump-console:start -->", "<!-- pump-console:end -->"
         rows = ["| 步骤 | 设备 | 动作 | 液体 | 体积 / 流路 / 方法 |", "| --- | --- | --- | --- | --- |"]
         measurement_blocks = []
@@ -184,12 +317,14 @@ class LabRepository:
             f"方案：{sequence['id']}\n\n" + "\n".join(rows) + "".join(measurement_blocks) +
             "\n\n此文件由 Pump Console 保存。完成了配置校验和离线预览，未执行硬件动作。\n"
             "液体体积由现有模板换算；计时估算不包含阀动作与通讯时间。\n" + end)
-        existing = path.read_text() if path.exists() else f"# {sequence['id']}\n\n"
+        if existing is None:
+            existing = path.read_text() if path.exists() else ""
+        existing = existing or f"# {sequence['id']}\n\n"
         if start in existing and end in existing:
             existing = existing[:existing.index(start)] + block + existing[existing.index(end) + len(end):]
         else:
             existing = existing.rstrip() + "\n\n" + block + "\n"
-        self._atomic_write(path, existing.encode())
+        return existing.encode()
 
     def runs(self, limit=8):
         records = []
