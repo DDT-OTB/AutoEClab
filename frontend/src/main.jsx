@@ -1,0 +1,9 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import AuthGate from './AuthGate.jsx';
+import './styles.css';
+import './editor.css';
+import './equipment.css';
+import './apparatus.css';
+import './accounts.css';
+createRoot(document.getElementById('root')).render(<AuthGate />);

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "device_id": "peristaltic_2",
+  "description": "Synthetic peristaltic_2 action template for tests and local development",
+  "device": {
+    "kind": "peristaltic",
+    "label": "Demo peristaltic_2",
+    "liquid": "waste_liquid",
+    "port": "/dev/autoeclab-demo/peristaltic_2",
+    "address": 0,
+    "baudrate": 9600,
+    "response_timeout_s": 1.0,
+    "completion_timeout_s": 30.0,
+    "poll_interval_s": 0.2,
+    "rpm": 100,
+    "direction": "CW",
+    "max_rpm": 400,
+    "max_run_seconds": 600.0,
+    "calibration": {
+      "rpm": 100,
+      "direction": "CW",
+      "flow_ml_min": 12.0,
+      "measured_at": null,
+      "basis": "synthetic_fixture",
+      "notes": "Artificial flow used only for repeatable test arithmetic."
+    },
+    "notes": "Synthetic configuration; no physical device or measurement is represented.",
+    "serial": {
+      "data_bits": 8,
+      "parity": "N",
+      "stop_bits": 1,
+      "rts": false,
+      "dtr": false,
+      "rtscts": false,
+      "dsrdtr": false,
+      "xonxoff": false,
+      "read_timeout_s": 0.05
+    },
+    "stop_timeout_s": 20.0
+  },
+  "action": {
+    "type": "drain",
+    "extra_time_fraction": 0.25,
+    "valve_device": "valve",
+    "operation": "withdraw",
+    "source": "demo_cell",
+    "destination": "demo_waste",
+    "fluid": "waste_liquid"
+  }
+}

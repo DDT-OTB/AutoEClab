@@ -1,0 +1,61 @@
+{
+  "schema_version": 2,
+  "id": "demo_rinse",
+  "description": "Synthetic workflow for automated tests",
+  "notes": [
+    "All volumes and flow values are artificial test inputs."
+  ],
+  "steps": [
+    {
+      "device": "peristaltic_1",
+      "operation": "inject",
+      "volume_ml": 1.0,
+      "fluid": "water"
+    },
+    {
+      "device": "valve",
+      "operation": "switch_route",
+      "route": "waste_1"
+    },
+    {
+      "device": "peristaltic_2",
+      "operation": "withdraw",
+      "volume_ml": 1.0,
+      "fluid": "waste_liquid"
+    },
+    {
+      "device": "syringe_c",
+      "operation": "inject",
+      "volume_ml": 2.0,
+      "fluid": "electrolyte"
+    },
+    {
+      "device": "valve",
+      "operation": "switch_route",
+      "route": "waste_2"
+    },
+    {
+      "device": "peristaltic_2",
+      "operation": "withdraw",
+      "volume_ml": 2.0,
+      "fluid": "waste_liquid"
+    },
+    {
+      "device": "peristaltic_1",
+      "operation": "inject",
+      "volume_ml": 1.0,
+      "fluid": "water"
+    },
+    {
+      "device": "valve",
+      "operation": "switch_route",
+      "route": "waste_1"
+    },
+    {
+      "device": "peristaltic_2",
+      "operation": "withdraw",
+      "volume_ml": 1.0,
+      "fluid": "waste_liquid"
+    }
+  ]
+}

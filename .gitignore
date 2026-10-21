@@ -1,0 +1,70 @@
+# Dependencies and generated frontend assets
+**/node_modules/
+/frontend/dist/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Private configuration and deployment output
+/config/server.json
+/config/server.local.json
+/config/server.*.local.json
+/config/server.production.json
+/deploy/local/
+.env
+.env.*
+!.env.example
+
+# Runtime accounts, sessions, experiments and reports
+/data/
+/logs/
+/reference/
+**/raw/
+**/results/
+**/measurements/
+/tests/fixtures/private/
+/tests/fixtures/lab/
+*.log
+*.sqlite*
+*.db
+*.db-*
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.h5
+*.hdf5
+
+# Certificates, private keys and credential handoffs
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.csr
+*.srl
+*credentials*
+*initial-login*
+*handoff*
+
+# Local release bundles and delivery metadata
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*-baseline.json
+delivery-manifest.json
+
+# Editor and operating-system state
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp

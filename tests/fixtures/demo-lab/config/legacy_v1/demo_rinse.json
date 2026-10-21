@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "id": "demo_rinse",
+  "description": "Synthetic workflow for automated tests",
+  "notes": [
+    "All volumes and flow values are artificial test inputs."
+  ],
+  "steps": [
+    {
+      "id": "step_01",
+      "device": "peristaltic_1",
+      "action": "dose",
+      "operation": "inject",
+      "volume_ml": 1.0,
+      "fluid": "water",
+      "source": "demo_supply",
+      "destination": "demo_cell",
+      "description": "Demo peristaltic_1, inject 1 mL"
+    },
+    {
+      "id": "step_02",
+      "device": "valve",
+      "action": "switch_valve",
+      "operation": "switch_route",
+      "route": "waste_1",
+      "description": "Demo valve \u2192 waste_1"
+    },
+    {
+      "id": "step_03",
+      "device": "peristaltic_2",
+      "action": "drain",
+      "operation": "withdraw",
+      "volume_ml": 1.0,
+      "fluid": "waste_liquid",
+      "source": "demo_cell",
+      "destination": "demo_waste (waste_1, channel 5)",
+      "extra_time_fraction": 0.25,
+      "requires_route": {
+        "device": "valve",
+        "route": "waste_1"
+      },
+      "description": "Demo peristaltic_2, withdraw 1 mL"
+    },
+    {
+      "id": "step_04",
+      "device": "syringe_c",
+      "action": "syringe_transfer",
+      "operation": "inject",
+      "volume_ml": 2.0,
+      "fluid": "electrolyte",
+      "source": "demo_supply",
+      "destination": "demo_cell",
+      "description": "Demo syringe_c, inject 2 mL"
+    },
+    {
+      "id": "step_05",
+      "device": "valve",
+      "action": "switch_valve",
+      "operation": "switch_route",
+      "route": "waste_2",
+      "description": "Demo valve \u2192 waste_2"
+    },
+    {
+      "id": "step_06",
+      "device": "peristaltic_2",
+      "action": "drain",
+      "operation": "withdraw",
+      "volume_ml": 2.0,
+      "fluid": "waste_liquid",
+      "source": "demo_cell",
+      "destination": "demo_waste (waste_2, channel 6)",
+      "extra_time_fraction": 0.25,
+      "requires_route": {
+        "device": "valve",
+        "route": "waste_2"
+      },
+      "description": "Demo peristaltic_2, withdraw 2 mL"
+    },
+    {
+      "id": "step_07",
+      "device": "peristaltic_1",
+      "action": "dose",
+      "operation": "inject",
+      "volume_ml": 1.0,
+      "fluid": "water",
+      "source": "demo_supply",
+      "destination": "demo_cell",
+      "description": "Demo peristaltic_1, inject 1 mL"
+    },
+    {
+      "id": "step_08",
+      "device": "valve",
+      "action": "switch_valve",
+      "operation": "switch_route",
+      "route": "waste_1",
+      "description": "Demo valve \u2192 waste_1"
+    },
+    {
+      "id": "step_09",
+      "device": "peristaltic_2",
+      "action": "drain",
+      "operation": "withdraw",
+      "volume_ml": 1.0,
+      "fluid": "waste_liquid",
+      "source": "demo_cell",
+      "destination": "demo_waste (waste_1, channel 5)",
+      "extra_time_fraction": 0.25,
+      "requires_route": {
+        "device": "valve",
+        "route": "waste_1"
+      },
+      "description": "Demo peristaltic_2, withdraw 1 mL"
+    }
+  ]
+}

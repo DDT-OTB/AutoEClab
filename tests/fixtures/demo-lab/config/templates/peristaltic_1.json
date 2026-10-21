@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "device_id": "peristaltic_1",
+  "description": "Synthetic peristaltic_1 action template for tests and local development",
+  "device": {
+    "kind": "peristaltic",
+    "label": "Demo peristaltic_1",
+    "liquid": "water",
+    "port": "/dev/autoeclab-demo/peristaltic_1",
+    "address": 0,
+    "baudrate": 9600,
+    "response_timeout_s": 1.0,
+    "completion_timeout_s": 30.0,
+    "poll_interval_s": 0.2,
+    "rpm": 100,
+    "direction": "CW",
+    "max_rpm": 400,
+    "max_run_seconds": 600.0,
+    "calibration": {
+      "rpm": 100,
+      "direction": "CW",
+      "flow_ml_min": 12.0,
+      "measured_at": null,
+      "basis": "synthetic_fixture",
+      "notes": "Artificial flow used only for repeatable test arithmetic."
+    },
+    "notes": "Synthetic configuration; no physical device or measurement is represented.",
+    "serial": {
+      "data_bits": 8,
+      "parity": "N",
+      "stop_bits": 1,
+      "rts": false,
+      "dtr": false,
+      "rtscts": false,
+      "dsrdtr": false,
+      "xonxoff": false,
+      "read_timeout_s": 0.05
+    },
+    "stop_timeout_s": 20.0
+  },
+  "action": {
+    "type": "dose",
+    "operation": "inject",
+    "source": "demo_supply",
+    "destination": "demo_cell",
+    "fluid": "water"
+  }
+}

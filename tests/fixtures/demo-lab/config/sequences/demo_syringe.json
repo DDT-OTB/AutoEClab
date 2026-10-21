@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "id": "demo_syringe",
+  "description": "Synthetic syringe action example",
+  "notes": [
+    "Artificial test input."
+  ],
+  "steps": [
+    {
+      "device": "syringe_c",
+      "operation": "inject",
+      "volume_ml": 1.0,
+      "fluid": "electrolyte"
+    }
+  ]
+}

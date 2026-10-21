@@ -1,0 +1,16 @@
+[Unit]
+Description=Pump Console configuration-only web interface
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/autoeclab
+Environment=PYTHONPATH=/opt/autoeclab/backend
+ExecStart=/usr/bin/python3 -u -m pump_console.server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

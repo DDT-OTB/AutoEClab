@@ -1,0 +1,35 @@
+{
+  "host": "127.0.0.1",
+  "port": 8765,
+  "lab_root": "/opt/autoeclab-instruments",
+  "static_root": "../frontend/dist",
+  "hardware_execution_enabled": false,
+  "authentication": {
+    "enabled": true,
+    "transport": "https_reverse_proxy",
+    "idle_timeout_seconds": 1800,
+    "absolute_timeout_seconds": 28800,
+    "login_window_seconds": 900,
+    "login_max_failures": 8
+  },
+  "access": {
+    "https_origins": [
+      "https://192.0.2.10"
+    ],
+    "trusted_proxy_addresses": [
+      "127.0.0.1"
+    ],
+    "allow_ssh_loopback": true
+  },
+  "status_mode": "controller_events",
+  "device_status": {
+    "enabled": false,
+    "cache_ttl_seconds": 30,
+    "min_interval_seconds": 3,
+    "timeout_seconds": 10
+  },
+  "monitoring": {
+    "push_interval_seconds": 1,
+    "stale_after_seconds": 15
+  }
+}

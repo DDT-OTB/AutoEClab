@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "device_id": "syringe_c",
+  "description": "Synthetic syringe_c action template for tests and local development",
+  "device": {
+    "kind": "syringe",
+    "label": "Demo syringe_c",
+    "liquid": "electrolyte",
+    "port": "/dev/autoeclab-demo/syringe_c",
+    "address": "1",
+    "baudrate": 9600,
+    "response_timeout_s": 1.0,
+    "completion_timeout_s": 120.0,
+    "poll_interval_s": 0.2,
+    "capacity_ml": 25.0,
+    "stroke_steps": 12000,
+    "speed_steps_s": 600,
+    "max_speed_steps_s": 800,
+    "expected_serial_number": "00001",
+    "notes": "Synthetic configuration; no physical device or measurement is represented.",
+    "serial": {
+      "data_bits": 8,
+      "parity": "N",
+      "stop_bits": 1,
+      "rts": false,
+      "dtr": false,
+      "rtscts": false,
+      "dsrdtr": false,
+      "xonxoff": false,
+      "read_timeout_s": 0.05
+    },
+    "valve_timeout_s": 20.0,
+    "move_timeout_factor": 3.0,
+    "move_timeout_margin_s": 15.0,
+    "stop_timeout_s": 20.0
+  },
+  "action": {
+    "type": "syringe_transfer",
+    "operation": "inject",
+    "source": "demo_supply",
+    "destination": "demo_cell",
+    "fluid": "electrolyte"
+  }
+}

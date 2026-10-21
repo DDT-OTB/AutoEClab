@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "device_id": "valve",
+  "description": "Synthetic valve action template for tests and local development",
+  "device": {
+    "kind": "valve",
+    "label": "Demo valve",
+    "port": "/dev/autoeclab-demo/valve",
+    "address": 0,
+    "baudrate": 9600,
+    "response_timeout_s": 1.0,
+    "completion_timeout_s": 30.0,
+    "poll_interval_s": 0.2,
+    "channels": 6,
+    "routes": {
+      "waste_1": 5,
+      "waste_2": 6
+    },
+    "notes": "Synthetic configuration; no physical device or measurement is represented.",
+    "serial": {
+      "data_bits": 8,
+      "parity": "N",
+      "stop_bits": 1,
+      "rts": false,
+      "dtr": false,
+      "rtscts": false,
+      "dsrdtr": false,
+      "xonxoff": false,
+      "read_timeout_s": 0.05
+    },
+    "stop_timeout_s": 20.0
+  },
+  "action": {
+    "type": "switch_valve",
+    "operation": "switch_route"
+  }
+}

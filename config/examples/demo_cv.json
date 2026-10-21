@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "id": "demo_cv",
+  "description": "Synthetic CV parameter example",
+  "notes": [
+    "Parameter planning only; no measurement data or hardware execution."
+  ],
+  "steps": [
+    {
+      "device": "electrochemical_station",
+      "operation": "measure",
+      "technique": "cyclic_voltammetry",
+      "parameters": {
+        "initial_potential_v": 0,
+        "upper_potential_v": 0.5,
+        "lower_potential_v": -0.5,
+        "final_potential_v": 0,
+        "initial_scan_direction": "positive",
+        "scan_rate_v_s": 0.1,
+        "potential_step_v": 0.001,
+        "cycles": 1,
+        "quiet_time_s": 5,
+        "current_range_a": null,
+        "reference_electrode": "unspecified"
+      }
+    }
+  ]
+}
