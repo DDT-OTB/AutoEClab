@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createApi} from './api.js';
-import {automationAvailability,preparedIsCurrent,sequenceKey} from './automation.js';
+import {automationAvailability,calibrationAllowsStart,preparedIsCurrent,sequenceKey} from './automation.js';
 
 const require=createRequire(import.meta.url);
 const compiled=require('esbuild').buildSync({stdin:{contents:"export {default as AutomationControl,ExecutionConfirmation} from './src/AutomationControl.jsx';",loader:'jsx',resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,platform:'node',format:'cjs',write:false,external:['react','lucide-react']}).outputFiles[0].text;
@@ -45,6 +45,25 @@ test('confirmation lists actual server-prepared pump amounts and rejects a subse
   assert.equal(preparedIsCurrent(prepared,changed),false);
   const invalid=render(ExecutionConfirmation,{prepared,currentSequence:changed,names:{}});
   assert.match(invalid,/编排内容已修改/);assert.match(invalid,/<button class="primary-button" disabled=""/);
+});
+test('a syringe experiment clearly shows missing calibration and cannot start until this preparation passed',()=>{
+  const syringe={...sequence,steps:[{device:'syringe_c',operation:'inject',fluid:'electrolyte',volume_ml:1}]};
+  const input={...prepared,sequence:syringe,calibration:{required:true,state:'required'}};
+  const html=render(ExecutionConfirmation,{prepared:input,currentSequence:syringe,names:{}});
+  assert.match(html,/本次实验注射泵回零校验/);assert.match(html,/未校验/);assert.match(html,/已确认本次回零排液安全/);
+  assert.match(html,/<button class="primary-button" disabled=""/);
+  for(const state of ['required','running','failed','invalidated','unknown','consumed']) assert.equal(calibrationAllowsStart({required:true,state}),false);
+  assert.equal(calibrationAllowsStart({required:true,state:'passed'}),true);
+  const passed=render(ExecutionConfirmation,{prepared:input,currentSequence:syringe,names:{},calibration:{required:true,state:'passed'}});
+  assert.match(passed,/已通过/);assert.doesNotMatch(passed,/<button class="primary-button" disabled=""/);
+});
+test('calibration request binds the preparation and requires explicit discharge confirmation',async()=>{
+  const calls=[];
+  const api=createApi('',{fetcher:async(url,options)=>{calls.push({url,options});return {ok:true,status:200,json:async()=>url.endsWith('/session')?{csrf_token:'synthetic-csrf'}:{}};}});
+  await api.session();await api.calibrateExecution('prepared-run','version',true);await api.preparation('prepared-run');
+  assert.deepEqual(JSON.parse(calls[1].options.body),{run_id:'prepared-run',version:'version',confirm_discharge:true});
+  assert.equal(calls[1].options.headers['X-CSRF-Token'],'synthetic-csrf');
+  assert.equal(calls[2].url,'/api/execution/preparations/prepared-run');
 });
 test('automation requests carry CSRF, fixed run identity and version without client PID or shell commands',async()=>{
   const calls=[];

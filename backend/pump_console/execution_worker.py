@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from .execution import RUN_ID, version, write_private
+from .execution import RUN_ID, initialization_plan, version, write_private
 from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
 
@@ -27,7 +27,16 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     config = importlib.import_module('lab_automation.config')
     compiler = importlib.import_module('lab_automation.templates')
     controller = importlib.import_module('lab_automation.__main__')
-    plan = compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config)
+    operation = snapshot.get('operation', 'sequence')
+    if operation not in ('sequence', 'calibrate_syringe'):
+        raise ValueError('Unsupported controller operation')
+    if operation == 'sequence' and any(step['device'] == 'syringe_c' for step in snapshot['plan']['steps']) and not job.get('calibration_consumed_at'):
+        raise ValueError('This syringe experiment has no verified calibration certificate')
+    if operation == 'calibrate_syringe':
+        if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
+            raise ValueError('Explicit discharge confirmation is required for calibration')
+        config.validate_devices(snapshot['devices'])
+    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config)
     if plan != snapshot['plan'] or plan['unresolved'] or not plan['ready_for_hardware']:
         raise ValueError('Prepared plan did not pass controller validation')
     logs = root / 'logs/automation'
@@ -63,12 +72,22 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                     event('configuration_snapshot', devices=snapshot['devices'], sequence=snapshot['sequence'], plan=plan)
                     event('automation_started', actor=job['started_by'], run_id=run_id)
                     publish(state='running')
-                    factory = runner_factory or controller.Runner
-                    factory(snapshot['devices']['devices'], plan, event).run()
+                    if operation == 'calibrate_syringe':
+                        from .syringe_initialization import initialize
+                        result = initialize(snapshot['devices']['devices'], plan, event)
+                        directory = Path(run_directory).resolve().parent / 'instruments'
+                        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        write_private(directory / 'syringe_c.json', {**result, 'device_id': 'syringe_c', 'status': 'initialized',
+                            'requires_initialization': False, 'initialized_at': datetime.now(timezone.utc).isoformat(),
+                            'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
+                        publish(initialization_verified=True)
+                    else:
+                        factory = runner_factory or controller.Runner
+                        factory(snapshot['devices']['devices'], plan, event).run()
                 finally:
                     journal.close()
                     journal = None
-        publish(state='completed', message='全部步骤执行完成。', exit_code=0)
+        publish(state='completed', message='本次实验的注射泵回零校验已通过。' if operation == 'calibrate_syringe' else '全部步骤执行完成。', exit_code=0)
         code = 0
     except BaseException as error:
         stop_requested = isinstance(error, (controller.RunInterrupted, KeyboardInterrupt))

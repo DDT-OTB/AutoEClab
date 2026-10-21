@@ -102,6 +102,20 @@ class PreparationTests(unittest.TestCase):
         self.assert_api_error('serial_port_unavailable', self.manager.start, prepared['run_id'], prepared['version'], 'admin')
         self.assertIsNone(self.manager.snapshot()['current'])
 
+    def test_uncalibrated_syringe_cannot_start_even_if_q_could_report_ready(self):
+        prepared = self.prepare()
+        self.assertEqual(prepared['calibration'], {'required': True, 'state': 'required', 'run_id': None})
+        with patch.object(self.manager, '_check_ports'):
+            self.assert_api_error('syringe_calibration_required', self.manager.start, prepared['run_id'], prepared['version'], 'admin')
+        self.assert_api_error('discharge_confirmation_required', self.manager.calibrate, prepared['run_id'], prepared['version'], 'admin', False)
+
+    def test_older_preparations_cannot_bypass_the_new_calibration_requirement(self):
+        prepared = self.prepare()
+        folder, job = self.manager._job(prepared['run_id'])
+        job.pop('requires_syringe_calibration'); write_private(folder / 'job.json', job)
+        with patch.object(self.manager, '_check_ports'):
+            self.assert_api_error('syringe_calibration_required', self.manager.start, prepared['run_id'], prepared['version'], 'admin')
+
     def test_same_start_is_idempotent_and_another_run_is_blocked(self):
         prepared = self.prepare()
         self.started_job(prepared)
@@ -173,7 +187,7 @@ class AutomationAuthorizationTests(unittest.TestCase):
 
     def test_viewer_and_anonymous_cannot_prepare_start_or_stop(self):
         with patch.object(self.repo.execution, 'prepare') as prepare, patch.object(self.repo.execution, 'start') as start, patch.object(self.repo.execution, 'stop') as stop:
-            for action in ('prepare', 'start', 'stop'):
+            for action in ('prepare', 'start', 'stop', 'calibrate'):
                 self.assertEqual(self.request('POST', '/api/execution/' + action, {}, role='viewer')[0], 403)
                 self.assertEqual(self.request('POST', '/api/execution/' + action, {}, role=None)[0], 401)
             prepare.assert_not_called(); start.assert_not_called(); stop.assert_not_called()
@@ -181,7 +195,7 @@ class AutomationAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/execution', role=None)[0], 401)
 
     def test_admin_still_requires_csrf_request_protection_and_exact_fields(self):
-        for action in ('prepare', 'start', 'stop'):
+        for action in ('prepare', 'start', 'stop', 'calibrate'):
             path = '/api/execution/' + action
             self.assertEqual(self.request('POST', path, {}, csrf=False)[0], 403)
             self.assertEqual(self.request('POST', path, {}, protection=False)[0], 403)

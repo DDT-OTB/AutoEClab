@@ -131,12 +131,15 @@ def main():
             assert code == 200 and deleted["deleted"]
             assert (directory / "data/backups" / deleted["backup_id"] / "qa_file_renamed.json").is_file()
             assert request("GET", "/api/experiments/qa_file_renamed/content", cookie=admin)[0] == 404
-            for action in ('prepare', 'start', 'stop'):
+            for action in ('prepare', 'start', 'stop', 'calibrate'):
                 assert request('POST', '/api/execution/' + action, {}, viewer, viewer_csrf)[0] == 403
             assert request('GET', '/api/execution', cookie=viewer)[0] == 200
             _, original, _ = request('GET', '/api/experiments/' + source['id'], cookie=admin)
             code, prepared, _ = request('POST', '/api/execution/prepare', {'sequence': original['sequence']}, admin, admin_csrf)
             assert code == 200 and prepared['hardware_executed'] is False
+            assert prepared['calibration']['required'] is True and prepared['calibration']['state'] == 'required'
+            assert request('GET', '/api/execution/preparations/' + prepared['run_id'], cookie=viewer)[0] == 200
+            assert request('POST', '/api/execution/calibrate', {'run_id': prepared['run_id'], 'version': prepared['version'], 'confirm_discharge': False}, admin, admin_csrf)[0] == 422
             code, rejected, _ = request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']}, admin, admin_csrf)
             assert code == 422 and rejected['error'] == 'serial_port_unavailable'
             assert not repository.execution.children
@@ -165,6 +168,7 @@ def main():
                 "viewer_denied": True, "registration_disabled": True, "reset_revokes_sessions": True,
                 "experiment_files_crud": True, "file_versions_and_backups": True,
                 "automation_admin_only": True, "execution_preparation": True, "controller_launches": 0,
+                "per_experiment_syringe_calibration": True,
                 "sse_frames": len(frames), "sse_interval_seconds": round(observed[1] - observed[0], 3),
                 "proxy_replaces_forged_client_ip": True, "production_accounts_modified": False,
                 "device_queries_sent": 0, "motion_commands_sent": 0}))

@@ -14,6 +14,8 @@ Automation preparation, start and stop require administrator authorization enfor
 
 Execution consumes a server-generated immutable snapshot, expires unused preparations and checks template changes. A fixed Python worker reuses the installed controller's preflight, serial lock and stop/close cleanup. Clients cannot supply executable paths, PIDs, hardware settings or serial commands. Repeated starts for the same execution are idempotent. Stop signals use Linux PID handles and exact process identity; a reused PID cannot redirect a stop to another process. A failed stop acknowledgement remains an explicit fault. Raw snapshots and controller output remain in ignored runtime directories.
 
+Every experiment using the syringe requires a successful mechanical homing certificate bound to that exact preparation. Calibration requires administrator access and explicit confirmation of safe discharge. Certificates cannot be borrowed by another experiment and are consumed on start; failed, stopped, expired or superseded calibration cannot authorize a run. Recovery sends a complete manufacturer-defined `ZR` string, never a bare resume `R` or software-zero `z`. Device identity, zero position, valve state, an empty command buffer and readiness must all verify. Calibration never automatically resumes a failed experiment.
+
 Explicit read-only instrument status queries also require administrator access and a device-specific allowlist. During a managed run, refreshing state reads the controller journal instead of competing for serial ports. Background SSE and polling never start operations or extend session expiry. Operator requests and accepted execution IDs are audited.
 
 ## Source privacy

@@ -138,6 +138,8 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         return self.json_response(200, {"runs": repository.runs()})
                     if path == "/api/execution":
                         return self.json_response(200, repository.execution.snapshot())
+                    if path.startswith('/api/execution/preparations/'):
+                        return self.json_response(200, repository.execution.preparation_status(path.removeprefix('/api/execution/preparations/')))
                     if path == "/api/admin/users":
                         self.require_admin(session)
                         return self.json_response(200, {"users": auth.list_users()})
@@ -253,10 +255,10 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         with auth.db() as db:
                             auth.audit(db, "experiment_" + parts[1] + "/" + parts[0], session["user"]["username"], self.request_peer)
                         return self.json_response(200, result)
-                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop'):
+                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate'):
                     self.require_admin(session)
                     payload = self.body()
-                    expected = {'sequence'} if path.endswith('/prepare') else {'run_id', 'version'} if path.endswith('/start') else {'run_id'}
+                    expected = {'sequence'} if path.endswith('/prepare') else {'run_id', 'version', 'confirm_discharge'} if path.endswith('/calibrate') else {'run_id', 'version'} if path.endswith('/start') else {'run_id'}
                     if not isinstance(payload, dict) or set(payload) != expected:
                         raise ApiError(400, 'Invalid automation request fields')
                     auth.session(token, touch=True)
@@ -268,6 +270,8 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         result = repository.execution.prepare(payload['sequence'], actor)
                     elif action == 'start':
                         result = repository.execution.start(payload['run_id'], payload['version'], actor)
+                    elif action == 'calibrate':
+                        result = repository.execution.calibrate(payload['run_id'], payload['version'], actor, payload['confirm_discharge'])
                     else:
                         result = repository.execution.stop(payload['run_id'], actor)
                     with auth.db() as db:

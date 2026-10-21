@@ -26,6 +26,9 @@ class PseudoPump:
         self.kind, self.channel, self.position, self.valve_position = kind, 5, 0, 'i'
         self.positions = []
         self.serial_number = 'SYNTHETIC-SYRINGE'
+        self.buffer_state = '0'
+        self.homing_count = 0
+        self.homing_error = 0
         self.stop_error = False
         self.commands = []
         self.closed = threading.Event()
@@ -44,14 +47,16 @@ class PseudoPump:
                         command = packet[2:].decode('ascii'); self.commands.append(command)
                         payload = ''
                         if command == '?': payload = str(self.position)
-                        elif command == '?10': payload = '0'
+                        elif command == '?10': payload = self.buffer_state
                         elif command == '?202': payload = self.serial_number
                         elif command == '?6': payload = self.valve_position
                         elif command == 'IR': self.valve_position = 'i'
                         elif command == 'OR': self.valve_position = 'o'
+                        elif command == 'ZR':
+                            self.homing_count += 1; self.position = 0; self.valve_position = 'o'; self.buffer_state = '0'
                         elif re.fullmatch(r'v[0-9]+V[0-9]+A[0-9]+R', command):
                             self.position = int(re.search(r'A([0-9]+)', command).group(1)); self.positions.append(self.position)
-                        status = 0x40 if self.busy else 0x60
+                        status = (0x40 if self.busy else 0x60) | (self.homing_error if command=='Q' and self.homing_count else 0)
                         os.write(self.master, b'/0' + bytes([status]) + payload.encode() + b'\x03\r\n')
                     continue
                 while len(pending) >= 8:
@@ -127,9 +132,16 @@ class LinuxExecutionTests(unittest.TestCase):
         code, prepared = self.request('POST', '/api/execution/prepare', {'sequence': self.sequence})
         self.assertEqual(code, 200)
         self.assertEqual(self.pump.commands, [])
+        if prepared['calibration']['required']:
+            self.calibrate(prepared)
         code, result = self.request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']})
         self.assertEqual(code, 202, result)
         return prepared
+
+    def calibrate(self, prepared):
+        code, result = self.request('POST', '/api/execution/calibrate', {'run_id': prepared['run_id'], 'version': prepared['version'], 'confirm_discharge': True})
+        self.assertEqual(code, 200, result)
+        self.wait_for(lambda: self.repo.execution.preparation_status(prepared['run_id'])['calibration']['state']=='passed')
 
     def test_real_runner_progress_sse_completion_and_duplicate_start(self):
         prepared = self.start()
@@ -231,8 +243,47 @@ class LinuxExecutionTests(unittest.TestCase):
     def test_syringe_preflight_failure_prevents_every_pump_from_moving(self):
         instruments = self.full_sequence()
         instruments['syringe_c'].busy = True
-        self.start()
+        _, prepared = self.request('POST', '/api/execution/prepare', {'sequence': self.sequence})
+        code, result = self.request('POST', '/api/execution/calibrate', {'run_id': prepared['run_id'], 'version': prepared['version'], 'confirm_discharge': True})
+        self.assertEqual(code, 200, result)
         self.wait_for(lambda: self.repo.execution.snapshot()['current']['state'] == 'failed')
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']})[0], 409)
         for name in ('peristaltic_1', 'peristaltic_2', 'peristaltic_3'):
             self.assertNotIn(0x47, instruments[name].commands)
         self.assertEqual(instruments['syringe_c'].positions, [])
+
+    def test_each_experiment_requires_its_own_homing_and_never_executes_pending_program(self):
+        instruments = self.full_sequence()
+        syringe = instruments['syringe_c']; syringe.buffer_state = '1'
+        _, first = self.request('POST', '/api/execution/prepare', {'sequence': self.sequence})
+        self.assertEqual(first['calibration']['state'], 'required')
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': first['run_id'], 'version': first['version']})[0], 409)
+        self.assertEqual(syringe.commands, [])
+        self.assertEqual(self.request('POST', '/api/execution/calibrate', {'run_id': first['run_id'], 'version': first['version'], 'confirm_discharge': False})[0], 422)
+        self.calibrate(first)
+        self.assertEqual(syringe.homing_count, 1)
+        self.assertNotIn('R', syringe.commands); self.assertNotIn('zR', syringe.commands)
+        self.assertEqual(syringe.positions, [])
+        self.assertEqual(self.pump.commands, [])
+        code, duplicate = self.request('POST', '/api/execution/calibrate', {'run_id': first['run_id'], 'version': first['version'], 'confirm_discharge': True})
+        self.assertEqual(code, 200); self.assertTrue(duplicate['already_started'])
+        self.assertEqual(syringe.homing_count, 1)
+        _, second = self.request('POST', '/api/execution/prepare', {'sequence': self.sequence})
+        self.assertEqual(second['calibration']['state'], 'required')
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': second['run_id'], 'version': second['version']})[0], 409)
+        self.calibrate(second)
+        self.assertEqual(self.repo.execution.preparation_status(first['run_id'])['calibration']['state'], 'invalidated')
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': first['run_id'], 'version': first['version']})[0], 409)
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': second['run_id'], 'version': second['version']})[0], 202)
+        self.wait_for(lambda: self.repo.execution.snapshot()['current']['state']=='completed')
+        self.assertEqual(syringe.homing_count, 2)
+        self.assertEqual(self.repo.execution.preparation_status(second['run_id'])['calibration']['state'], 'consumed')
+
+    def test_failed_homing_cannot_be_used_as_a_start_certificate(self):
+        instruments = self.full_sequence(); instruments['syringe_c'].homing_error = 7
+        _, prepared = self.request('POST', '/api/execution/prepare', {'sequence': self.sequence})
+        self.request('POST', '/api/execution/calibrate', {'run_id': prepared['run_id'], 'version': prepared['version'], 'confirm_discharge': True})
+        self.wait_for(lambda: not self.repo.execution.snapshot()['current']['controller_alive'])
+        self.assertEqual(self.repo.execution.preparation_status(prepared['run_id'])['calibration']['state'], 'failed')
+        self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']})[0], 409)
+        for name in ('peristaltic_1','peristaltic_2','peristaltic_3'):self.assertEqual(instruments[name].commands, [])

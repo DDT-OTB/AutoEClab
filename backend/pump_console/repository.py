@@ -74,9 +74,10 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.8.0",
+            "ok": True, "service": "pump-console", "version": "0.8.1",
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
             "automation_administrator_required": True,
+            "syringe_calibration_required_before_each_experiment": True,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
             "measurement_execution_enabled": False,

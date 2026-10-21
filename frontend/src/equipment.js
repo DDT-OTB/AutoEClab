@@ -46,7 +46,7 @@ export function equipmentSummary(items) {
 
 export function activeFlowDevice(items, runtime, fresh) {
   const step=runtime?.active_step;
-  if (!fresh || runtime?.state!=='running' || step?.state!=='executing') return null;
+  if (!fresh || runtime?.state!=='running' || step?.state!=='executing' || step.action==='initialize_syringe') return null;
   const device=items.find(item=>item.id===step.device && !item.virtual);
   return device?.activity.state==='executing' ? device.id : null;
 }
