@@ -56,6 +56,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(status["active_step"])
         self.assertEqual(status["devices"], {})
 
+    def test_managed_terminal_result_survives_exit_but_never_overrides_active_status_checks(self):
+        self.emit('sequence_completed', sequence='live_test')
+        self.owner = {'state': 'idle', 'reason': 'no_controller', 'alive': False}
+        self.assertEqual(self.monitor.snapshot(journal_path=self.journal)['state'], 'completed')
+        self.owner = {'state': 'checking', 'reason': 'read_only_status_refresh', 'alive': False}
+        self.assertEqual(self.monitor.snapshot(journal_path=self.journal)['state'], 'checking')
+        self.owner = {'state': 'unknown', 'reason': 'controller_unavailable', 'alive': None}
+        self.assertEqual(self.monitor.snapshot(journal_path=self.journal)['state'], 'unknown')
+
     def test_serial_heartbeat_prevents_false_timeout_during_a_long_step(self):
         self.time += timedelta(seconds=16)
         self.assertEqual(self.monitor.snapshot()["state"], "unresponsive")
@@ -116,6 +125,8 @@ class RuntimeTests(unittest.TestCase):
         (proc / "locks").write_text(f"1: FLOCK ADVISORY WRITE 4321 {identity} 0 EOF\n")
         (fd / "5").symlink_to(self.journal)
         self.assertEqual(active_controller(self.logs, proc)["journal"], self.journal.resolve())
+        (proc / '4321/cmdline').write_bytes(b'python3\0-m\0pump_console.execution_worker\0--execute\0')
+        self.assertEqual(active_controller(self.logs, proc)['journal'], self.journal.resolve())
         (proc / "4321/cmdline").write_bytes(b"python3\0-m\0pump_console.device_status\0")
         self.assertEqual(active_controller(self.logs, proc)["state"], "checking")
         (proc / "4321/cmdline").write_bytes(b"python3\0other.py\0")

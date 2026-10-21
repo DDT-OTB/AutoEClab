@@ -36,7 +36,7 @@ def active_controller(logs_dir, proc_root=Path("/proc")):
             args = (process / "cmdline").read_bytes().split(b"\0")
             if b"pump_console.device_status" in args:
                 return {"state": "checking", "reason": "read_only_status_refresh", "alive": False}
-            if b"lab_automation" not in args or b"--execute" not in args:
+            if not any(module in args for module in (b"lab_automation", b"pump_console.execution_worker")) or b"--execute" not in args:
                 return {"state": "unknown", "reason": "unrecognized_lock_owner", "alive": None}
             for descriptor in (process / "fd").iterdir():
                 try:
@@ -105,7 +105,7 @@ class RuntimeMonitor:
             except (ValueError, TypeError, AttributeError):
                 continue
 
-    def snapshot(self):
+    def snapshot(self, journal_path=None):
         with self.lock:
             now, owner = self.now(), self.controller_reader()
             result = dict(state=owner["state"], reason=owner["reason"], source="controller_journal",
@@ -113,8 +113,11 @@ class RuntimeMonitor:
                           completed_steps=0, active_step=None, devices={}, stale_after_seconds=self.stale_after,
                           updated_at=now.isoformat(), last_event_at=None, hardware_feedback_independent=False)
             if owner["state"] != "active":
-                return result
-            path = Path(owner["journal"])
+                if owner['state'] != 'idle' or owner['alive'] is not False or journal_path is None or not Path(journal_path).is_file():
+                    return result
+                path = Path(journal_path)
+            else:
+                path = Path(owner["journal"])
             try:
                 self._read(path)
             except (OSError, ValueError):
@@ -126,6 +129,8 @@ class RuntimeMonitor:
                 result.update(state="completed" if self.terminal["event"] == "sequence_completed" else "aborted",
                               reason=self.terminal["event"])
                 return result
+            if owner['alive'] is not True:
+                return {**result, 'state': 'idle', 'active_step': None, 'devices': {}}
             last = timestamp(self.last_at)
             age = (now - last).total_seconds() if last else None
             stale = age is None or age > self.stale_after or age < -5

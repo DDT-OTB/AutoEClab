@@ -46,7 +46,7 @@ def main():
         auth = AuthStore(directory / "security/auth.sqlite3")
         admin_password, viewer_password, changed_password, reset_password = ["a1" + secrets.token_urlsafe(24) for _ in range(4)]
         auth.create_user("qa_admin", admin_password, temporary=False)
-        repository = LabRepository(lab, directory / "data")
+        repository = LabRepository(lab, directory / "data", execution_enabled=True)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             tls_port = reservation.getsockname()[1]
@@ -116,7 +116,7 @@ def main():
             viewer, viewer_csrf, session = login("qa_viewer", changed_password)
             assert not session["user"]["must_change_password"]
             code, status, _ = request("GET", "/api/status", cookie=viewer)
-            assert code == 200 and status["motion_commands_sent"] == 0 and status["serial_commands_sent"] == 0
+            assert code == 200 and status["motion_commands_sent"] is None and status["serial_commands_sent"] == 0
             _, catalog, _ = request("GET", "/api/experiments", cookie=admin)
             source = next(item for item in catalog["experiments"] if item["id"] == "demo_rinse_with_predrain")
             code, copied, _ = request("POST", "/api/experiments/" + source["id"] + "/duplicate", {"new_id": "qa_file_copy", "expected_version": source["version"]}, admin, admin_csrf)
@@ -131,6 +131,15 @@ def main():
             assert code == 200 and deleted["deleted"]
             assert (directory / "data/backups" / deleted["backup_id"] / "qa_file_renamed.json").is_file()
             assert request("GET", "/api/experiments/qa_file_renamed/content", cookie=admin)[0] == 404
+            for action in ('prepare', 'start', 'stop'):
+                assert request('POST', '/api/execution/' + action, {}, viewer, viewer_csrf)[0] == 403
+            assert request('GET', '/api/execution', cookie=viewer)[0] == 200
+            _, original, _ = request('GET', '/api/experiments/' + source['id'], cookie=admin)
+            code, prepared, _ = request('POST', '/api/execution/prepare', {'sequence': original['sequence']}, admin, admin_csrf)
+            assert code == 200 and prepared['hardware_executed'] is False
+            code, rejected, _ = request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']}, admin, admin_csrf)
+            assert code == 422 and rejected['error'] == 'serial_port_unavailable'
+            assert not repository.execution.children
             assert request("GET", "/api/admin/users", cookie=viewer)[0] == 403
             assert request("POST", "/api/admin/users", {"username": "forged_admin", "password": viewer_password, "role": "admin"}, viewer, viewer_csrf)[0] == 403
             assert request("POST", "/api/admin/users/reset-password", {"username": "qa_viewer", "password": reset_password}, admin, admin_csrf)[0] == 200
@@ -155,6 +164,7 @@ def main():
             print(json.dumps({"isolated_tls_nginx": "passed", "secure_cookie": True, "administrator_provisioning": True,
                 "viewer_denied": True, "registration_disabled": True, "reset_revokes_sessions": True,
                 "experiment_files_crud": True, "file_versions_and_backups": True,
+                "automation_admin_only": True, "execution_preparation": True, "controller_launches": 0,
                 "sse_frames": len(frames), "sse_interval_seconds": round(observed[1] - observed[0], 3),
                 "proxy_replaces_forged_client_ip": True, "production_accounts_modified": False,
                 "device_queries_sent": 0, "motion_commands_sent": 0}))

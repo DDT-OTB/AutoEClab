@@ -55,6 +55,10 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
       method: 'DELETE', body: JSON.stringify({ expected_version }),
     }),
     runs: () => request('/api/runs'),
+    execution: () => request('/api/execution'),
+    prepareExecution: sequence => request('/api/execution/prepare', { method: 'POST', body: JSON.stringify({sequence}) }),
+    startExecution: (run_id, version) => request('/api/execution/start', { method: 'POST', body: JSON.stringify({run_id, version}) }),
+    stopExecution: run_id => request('/api/execution/stop', { method: 'POST', body: JSON.stringify({run_id}) }),
     preview: sequence => request('/api/preview', { method: 'POST', body: JSON.stringify({ sequence }) }),
     save: (sequence, version) => request('/api/experiments', {
       method: 'POST', body: JSON.stringify({ sequence, expected_version: version }),

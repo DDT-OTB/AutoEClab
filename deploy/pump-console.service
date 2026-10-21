@@ -1,5 +1,5 @@
 [Unit]
-Description=Pump Console configuration-only web interface
+Description=Pump Console authenticated automation interface
 After=network.target
 
 [Service]
@@ -9,6 +9,8 @@ Environment=PYTHONPATH=/opt/autoeclab/backend
 ExecStart=/usr/bin/python3 -u -m pump_console.server
 Restart=on-failure
 RestartSec=3
+KillMode=control-group
+TimeoutStopSec=90
 NoNewPrivileges=true
 PrivateTmp=true
 

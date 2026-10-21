@@ -4,6 +4,7 @@
   "lab_root": "./data/demo-lab",
   "static_root": "../frontend/dist",
   "hardware_execution_enabled": false,
+  "automation": {"prepare_ttl_seconds": 600},
   "authentication": {
     "enabled": true,
     "transport": "ssh_loopback",

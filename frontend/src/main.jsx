@@ -7,4 +7,5 @@ import './equipment.css';
 import './apparatus.css';
 import './accounts.css';
 import './experiment-files.css';
+import './automation.css';
 createRoot(document.getElementById('root')).render(<AuthGate />);

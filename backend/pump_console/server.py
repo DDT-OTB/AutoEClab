@@ -136,6 +136,8 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         return self.json_response(200, repository.get_experiment(name))
                     if path == "/api/runs":
                         return self.json_response(200, {"runs": repository.runs()})
+                    if path == "/api/execution":
+                        return self.json_response(200, repository.execution.snapshot())
                     if path == "/api/admin/users":
                         self.require_admin(session)
                         return self.json_response(200, {"users": auth.list_users()})
@@ -251,6 +253,26 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         with auth.db() as db:
                             auth.audit(db, "experiment_" + parts[1] + "/" + parts[0], session["user"]["username"], self.request_peer)
                         return self.json_response(200, result)
+                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop'):
+                    self.require_admin(session)
+                    payload = self.body()
+                    expected = {'sequence'} if path.endswith('/prepare') else {'run_id', 'version'} if path.endswith('/start') else {'run_id'}
+                    if not isinstance(payload, dict) or set(payload) != expected:
+                        raise ApiError(400, 'Invalid automation request fields')
+                    auth.session(token, touch=True)
+                    actor = session['user']['username']
+                    action = path.rsplit('/', 1)[-1]
+                    with auth.db() as db:
+                        auth.audit(db, 'automation_' + action + '_requested', actor, self.request_peer)
+                    if action == 'prepare':
+                        result = repository.execution.prepare(payload['sequence'], actor)
+                    elif action == 'start':
+                        result = repository.execution.start(payload['run_id'], payload['version'], actor)
+                    else:
+                        result = repository.execution.stop(payload['run_id'], actor)
+                    with auth.db() as db:
+                        auth.audit(db, 'automation_' + action + '_accepted/' + (result.get('run_id') or result['execution']['run_id']), actor, self.request_peer)
+                    return self.json_response(202 if action == 'start' else 200, result)
                 if any(value in path for value in ("/execute", "/command", "/probe", "/initialize", "/stop")):
                     raise ApiError(403, "Hardware execution and serial commands are disabled.", "hardware_disabled")
                 if path not in ("/api/preview", "/api/experiments"):
@@ -307,8 +329,8 @@ def main():
     parser.add_argument("--port", type=int)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
-    if config.get("hardware_execution_enabled") is not False:
-        raise ValueError("Hardware execution must remain disabled")
+    if type(config.get("hardware_execution_enabled")) is not bool:
+        raise ValueError("An explicit hardware execution enable flag is required")
     authentication = config.get("authentication", {})
     if authentication.get("enabled") is not True or authentication.get("transport") not in ("ssh_loopback", "https_reverse_proxy"):
         raise ValueError("Authentication and a protected transport are required")
@@ -338,7 +360,8 @@ def main():
         value = device_status.get(key, default)
         if type(value) not in (int, float) or not minimum <= value <= maximum:
             raise ValueError("Invalid device status setting: " + key)
-    repository = LabRepository(lab_root, root / "data", monitoring, device_status)
+    repository = LabRepository(lab_root, root / "data", monitoring, device_status,
+                               config['hardware_execution_enabled'], config.get('automation'))
     static_root = (args.config.parent / config["static_root"]).resolve()
     server = make_server(config["host"], args.port or config["port"], repository, static_root, auth, access)
     print(f"Pump Console ready: http://{config['host']}:{server.server_port}", flush=True)

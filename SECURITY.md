@@ -10,7 +10,11 @@ State-changing requests require a CSRF token, the request-protection header and 
 
 The Python process binds to loopback. Campus access uses an HTTPS reverse proxy, an exact origin allowlist, replaced forwarding headers and a separate `Secure; HttpOnly; SameSite=Strict` cookie. Only a local proxy is trusted. Local SSH access uses a separate loopback cookie.
 
-The browser cannot start, stop, initialize, move or issue arbitrary commands to hardware. Read-only instrument status queries require an explicit administrator request and a device-specific allowlist. CV actions remain parameter-planning only.
+Automation preparation, start and stop require administrator authorization enforced by the backend, a valid session, CSRF protection and an exact request schema. Viewers may monitor executions but cannot operate instruments. Public configurations default to disabled hardware execution. CV actions remain parameter-planning only; a sequence containing an unsupported measurement cannot start.
+
+Execution consumes a server-generated immutable snapshot, expires unused preparations and checks template changes. A fixed Python worker reuses the installed controller's preflight, serial lock and stop/close cleanup. Clients cannot supply executable paths, PIDs, hardware settings or serial commands. Repeated starts for the same execution are idempotent. Stop signals use Linux PID handles and exact process identity; a reused PID cannot redirect a stop to another process. A failed stop acknowledgement remains an explicit fault. Raw snapshots and controller output remain in ignored runtime directories.
+
+Explicit read-only instrument status queries also require administrator access and a device-specific allowlist. During a managed run, refreshing state reads the controller journal instead of competing for serial ports. Background SSE and polling never start operations or extend session expiry. Operator requests and accepted execution IDs are audited.
 
 ## Source privacy
 

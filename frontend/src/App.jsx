@@ -17,6 +17,8 @@ import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
 import ExperimentManager from './ExperimentManager.jsx';
+import AutomationControl from './AutomationControl.jsx';
+import { sequenceKey } from './automation.js';
 import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
 const emptyDraft = () => ({
@@ -53,6 +55,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [base, setBase] = useState({ id: null, version: null });
   const [dirty, setDirty] = useState(false);
   const [plan, setPlan] = useState(null);
+  const [submittedSequence,setSubmittedSequence]=useState(null);
   const [connected, setConnected] = useState(false);
   const [latency, setLatency] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,7 +83,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const selectedStep = draft.steps.find(step => step._key === selected);
   const selectedTemplate = selectedStep ? actionTemplates[selectedStep.device] : null;
   const measurementCount = draft.steps.filter(isMeasurement).length;
-  const runningIndex = liveStepIndex(draft, status.runtime, dirty, fresh);
+  const runningIndex = liveStepIndex(draft, status.runtime, dirty && submittedSequence!==sequenceKey(sequence), fresh);
   const totals = useMemo(() => {
     const result = { inject: 0, withdraw: 0 };
     draft.steps.forEach(step => {
@@ -278,20 +281,21 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
         {user?.role==='admin' && <button onClick={()=>setModal('accounts')}><Users size={18}/><span>账号管理</span></button>}
         <button onClick={() => {if(activeNav==='history') historyRef.current?.scrollIntoView({behavior:'smooth'});else setActiveNav('history');}}><History size={18} /><span>运行记录</span></button>
       </nav>
-      <div className="sidebar-note"><ShieldCheck size={19} /><strong>配置工作模式</strong><p>编辑、校验与保存方案<br />硬件执行尚未启用</p></div>
+      <div className="sidebar-note"><ShieldCheck size={19} /><strong>{health?.hardware_execution_enabled?'自动化工作模式':'配置工作模式'}</strong><p>编辑、校验与保存方案<br />{health?.hardware_execution_enabled?'管理员可启动实验':'硬件执行尚未启用'}</p></div>
       <button className="connection-tile" onClick={() => setModal('connection')}><span className={'status-dot ' + (connected ? 'green' : 'red')} /><span>{connected ? '后端已连接' : '等待后端连接'}<small>Lab server</small></span><ChevronRight size={15} /></button>
       <div className="sidebar-footer"><span className="avatar">L</span><span>Lab workspace<small>本地实验环境</small></span><CircleHelp size={16} /></div>
     </aside>
     <main className="main-area">
       <header className="topbar">
         <div><div className="breadcrumb">Workspace <ChevronRight size={12} /><span>{activeNav==='experiments'?'实验方案':'实验控制台'}</span></div><h1>{activeNav==='experiments'?'每一份方案，有序管理':'让实验流程，一目了然'}<span>{activeNav==='experiments'?'实验方案文件管理':'配置与监测工作台'}</span></h1></div>
-        <div className="top-actions">{user?.role==="admin" && <button className="outline-button campus-account-shortcut" onClick={()=>setModal("accounts")}><Users size={14}/>账号管理</button>}<span className="account-label"><ShieldCheck size={14} />{user?.username}<small>{user?.role === 'viewer' ? '只读' : '管理员'}</small></span><button className="subtle-button account-password-button" onClick={onChangePassword}>修改密码</button><button className="outline-button logout-button" onClick={onLogout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button><span className="mode-badge"><LockKeyhole size={13} />硬件执行已锁定</span><button className="outline-button refresh-all-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress} aria-busy={refreshing || !!status.device_scan?.in_progress}><RefreshCw size={16} className={refreshing || status.device_scan?.in_progress ? 'refresh-spinning' : ''} />{refreshing || status.device_scan?.in_progress ? '正在刷新…' : user?.role === 'viewer' ? '更新状态显示' : '刷新全部状态'}</button><button className="subtle-button" onClick={() => setModal('connection')}><Link2 size={15} />连接详情</button></div>
+        <div className="top-actions">{user?.role==="admin" && <button className="outline-button campus-account-shortcut" onClick={()=>setModal("accounts")}><Users size={14}/>账号管理</button>}<span className="account-label"><ShieldCheck size={14} />{user?.username}<small>{user?.role === 'viewer' ? '只读' : '管理员'}</small></span><button className="subtle-button account-password-button" onClick={onChangePassword}>修改密码</button><button className="outline-button logout-button" onClick={onLogout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button><span className="mode-badge"><ShieldCheck size={13} />{health?.hardware_execution_enabled?'管理员执行模式':'硬件执行已锁定'}</span><button className="outline-button refresh-all-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress} aria-busy={refreshing || !!status.device_scan?.in_progress}><RefreshCw size={16} className={refreshing || status.device_scan?.in_progress ? 'refresh-spinning' : ''} />{refreshing || status.device_scan?.in_progress ? '正在刷新…' : user?.role === 'viewer' ? '更新状态显示' : '刷新全部状态'}</button><button className="subtle-button" onClick={() => setModal('connection')}><Link2 size={15} />连接详情</button></div>
       </header>
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
+        <AutomationControl user={user} sequence={sequence} status={status} health={health} fresh={fresh} errors={errors} measurementCount={measurementCount} busy={busy} names={names} onPlan={setPlan} onRefresh={refresh} onStarted={value=>setSubmittedSequence(sequenceKey(value))}/>
+        <LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names} />
         {activeNav==='experiments' ? <ExperimentManager items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setActiveNav('editor')} onChanged={fileChanged}/> : <>
         <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
-        <LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names} />
 
         <section className="experiment-section" ref={editorRef}>
           <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.steps.length} 步</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setActiveNav('experiments')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
@@ -340,7 +344,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
                   {plan?.warnings?.map((message,index) => <p className="summary-warning" key={index}>{message}</p>)}
                 </div>}
               </div>
-              <div className="inspector-footer"><LockKeyhole size={13} /><span>当前为配置编排，设备动作未启用</span></div>
+              <div className="inspector-footer"><LockKeyhole size={13} /><span>{health?.hardware_execution_enabled?'运行使用已确认快照；编辑不会改变当前任务':'当前为配置编排，设备动作未启用'}</span></div>
             </aside>
           </div>
           <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="subtle-button" onClick={download}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !draft.steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !draft.steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
@@ -353,7 +357,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
     {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
       {modal === 'import' ? <><p className="modal-description">选择本机 JSON 文件，或粘贴英文配置，载入后可继续编排。</p><label className="file-import-input"><FileJson size={16}/><span>选择方案文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label="选择实验方案 JSON 文件"/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder='{"schema_version":2,"id":"my_experiment","description":"...","steps":[]}' aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>载入编辑器<ArrowUpRight size={15} /></button></> :
-        modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>配置 / 离线预览</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>启动、停止、初始化及移动均禁用</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
+        modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :
         modal === 'templates' ? <div className="template-grid">{Object.entries(actionTemplates).map(([id, template]) => <article key={id}><h3>{names[id] || id}</h3><small>{id==='electrochemical_station' ? 'action_templates/cyclic_voltammetry.json' : id+'.json'}</small><pre>{JSON.stringify(template, null, 2)}</pre></article>)}</div> :
         <><div className="modal-description">{modal.run?.sequence_id} · {modal.run?.completed_steps} 步完成</div><div className="run-events">{modal.run?.events.filter(item => ['step_started', 'step_completed', 'sequence_aborted', 'sequence_completed'].includes(item.event)).map((item, index) => <div key={index}><span className="status-dot gray" /><span>{timeText(item.time)}</span><strong>{item.event === 'step_started' ? item.step.description : item.event === 'step_completed' ? item.id + ' 已完成' : item.message || item.event}</strong></div>)}</div></>}

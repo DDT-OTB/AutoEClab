@@ -62,7 +62,7 @@ export function LiveRun({ runtime, fresh, streaming, names }) {
       {running && active ? <><div className="runtime-operation"><b>{names[active.device] || active.device}</b><span>{activity.label}</span>{active.volume_ml !== undefined && <b>{active.volume_ml} mL</b>}{active.route && <b>{active.route}</b>}<small>第 {active.index} / {runtime.step_count || '?'} 步</small></div>
         <div className="runtime-progress"><div role="progressbar" aria-label="当前步骤估算进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress ?? undefined} className={progress === null ? 'indeterminate' : ''}><i style={{ width: progress === null ? '35%' : progress + '%' }} /></div><span>{progress === null ? '等待动作反馈' : '估算 ' + progress + '%'}</span></div>
         <div className="runtime-caption"><span>{runtime.sequence_id}</span><span><Timer size={12} />已执行 {active.elapsed_seconds.toFixed(1)} 秒{active.estimated_seconds ? ' / 预计 ' + active.estimated_seconds.toFixed(1) + ' 秒' : ''}</span></div></> :
-        <p className="runtime-caption">{running ? '正在检查设备或衔接下一步。' : state === 'unresponsive' ? '已停止显示运行动画，等待新的程序事件。' : '通过现有 Python 控制程序执行实验时，装置图、设备列表与当前步骤会自动更新。'}</p>}
+        <p className="runtime-caption">{running ? '正在检查设备或衔接下一步。' : state === 'unresponsive' ? '已停止显示运行动画，等待新的程序事件。' : ['completed','aborted'].includes(state) ? runtime.sequence_id+' · 已完成 '+runtime.completed_steps+' / '+runtime.step_count+' 步。'+(state==='completed'?'控制程序已报告本次方案完成。':'请结合运行结果与停止回读检查设备。') : '通过网页启动或现有 Python 控制程序执行实验时，装置图、设备列表与当前步骤会自动更新。'}</p>}
     </div>
   </section>;
 }

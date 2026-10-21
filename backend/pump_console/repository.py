@@ -49,7 +49,7 @@ def identifier(value):
 
 
 class LabRepository:
-    def __init__(self, lab_root, data_root, monitoring=None, device_status=None):
+    def __init__(self, lab_root, data_root, monitoring=None, device_status=None, execution_enabled=False, automation=None):
         self.root = Path(lab_root).resolve()
         self.templates_dir = self.root / "config/templates"
         self.sequences_dir = self.root / "config/sequences"
@@ -63,6 +63,10 @@ class LabRepository:
         sys.path.insert(0, str(self.root / "src"))
         self.compiler = importlib.import_module("lab_automation.templates")
         self.config = importlib.import_module("lab_automation.config")
+        from .execution import ExecutionManager
+        if type(execution_enabled) is not bool:
+            raise ValueError('Invalid execution enable flag')
+        self.execution = ExecutionManager(self, execution_enabled, automation)
 
     def templates(self):
         _, templates = self.compiler.load_templates(self.templates_dir)
@@ -70,8 +74,9 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.7.0",
-            "mode": "configuration", "hardware_execution_enabled": False,
+            "ok": True, "service": "pump-console", "version": "0.8.0",
+            "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
+            "automation_administrator_required": True,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
             "measurement_execution_enabled": False,
@@ -79,7 +84,7 @@ class LabRepository:
             "ui": {"default_volume_ml": 1, "status_poll_seconds": self.monitoring["push_interval_seconds"]},
         }
 
-    def preview(self, sequence):
+    def preview(self, sequence, _templates=None):
         if not isinstance(sequence, dict):
             raise ApiError(400, "sequence 必须是 JSON 对象。")
         identifier(sequence.get("id"))
@@ -88,7 +93,7 @@ class LabRepository:
         if re.search(r"[\u3400-\u9fff]", json.dumps(sequence, ensure_ascii=False)):
             raise ApiError(422, "配置 JSON 请使用英文；界面和说明文档可以使用中文。", "english_json_required")
         try:
-            devices, templates = self.compiler.load_templates(self.templates_dir)
+            devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
             plan = compile_workflow(sequence, devices, templates, self.compiler, self.config)
         except (ValueError, KeyError, TypeError) as error:
             raise ApiError(422, str(error), "validation_error") from error
@@ -179,6 +184,9 @@ class LabRepository:
             raise ApiError(409, "方案已被修改，请刷新列表并检查最新内容后重试。", "version_conflict")
 
     def _require_unused(self, name):
+        current = self.execution.snapshot()['current']
+        if current and current['controller_alive'] and current['sequence_id'] == name:
+            raise ApiError(409, '控制程序正在使用此方案，运行结束后才能修改文件。', 'experiment_in_use')
         runtime = self.runtime.snapshot()
         if runtime.get("controller_alive") is True and runtime.get("sequence_id") in (name, None):
             raise ApiError(409, "控制程序正在使用此方案，运行结束后才能修改文件。", "experiment_in_use")
@@ -364,7 +372,8 @@ class LabRepository:
     def status(self):
         templates = self.templates()
         runs = self.runs()
-        runtime = self.runtime.snapshot()
+        execution = self.execution.snapshot()
+        runtime = self.runtime.snapshot(journal_path=self.execution.journal_path())
         scan = self.device_status.snapshot()
         latest_run = max((timestamp(run.get("started_at")) for run in runs if timestamp(run.get("started_at"))), default=None)
         for hardware in scan["devices"].values():
@@ -394,11 +403,17 @@ class LabRepository:
                 "speed_steps_s": config.get("speed_steps_s"), "channels": config.get("channels")})
         return {"devices": devices, "sampled_at": utc_now(), "mode": "controller_events", "runtime": runtime,
                 "device_scan": scan, "serial_commands_sent": scan.get("queries_sent", 0),
-                "motion_commands_sent": 0, "hardware_execution_enabled": False}
+                "motion_commands_sent": None if self.execution.enabled else 0,
+                "hardware_execution_enabled": self.execution.enabled, "execution": execution}
 
     def refresh_status(self):
         if self.device_status.policy["enabled"] is not True:
             raise ApiError(403, "硬件状态读取尚未启用。", "status_refresh_disabled")
+        current = self.execution.snapshot()['current']
+        if current and current['controller_alive']:
+            return {"scan": {"state": "skipped", "reason": "controller_active"}, "status": self.status(),
+                    "health": self.health(), "runs": self.runs(), "templates": self.templates(),
+                    "measurement_templates": measurement_templates()}
         try:
             scan = self.device_status.refresh(self.templates())
         except RefreshBusy:
