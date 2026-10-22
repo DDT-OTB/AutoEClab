@@ -89,6 +89,13 @@ class LinuxExecutionTests(unittest.TestCase):
         self.setUpAuthorization()
         self.pump = PseudoPump()
         self.extra_devices = []
+        self.preflight_devices={}
+        for name,kind in [('peristaltic_2','peristaltic'),('valve','valve')]:
+            device=PseudoPump(kind);self.extra_devices.append(device);self.preflight_devices[name]=device
+            file=self.lab/'config/templates'/(name+'.json')
+            template=json.loads(file.read_text());template['device']['port']=device.port
+            if name=='peristaltic_2':template['device']['calibration']['flow_ml_min']=6000
+            file.write_text(json.dumps(template))
         file = self.lab / 'config/templates/peristaltic_1.json'
         template = json.loads(file.read_text()); template['device']['port'] = self.pump.port
         file.write_text(json.dumps(template))
@@ -109,7 +116,10 @@ class LinuxExecutionTests(unittest.TestCase):
     def full_sequence(self):
         instruments = {'peristaltic_1': self.pump}
         for name, kind in [('peristaltic_2', 'peristaltic'), ('peristaltic_3', 'peristaltic'), ('valve', 'valve'), ('syringe_c', 'syringe')]:
-            device = PseudoPump(kind); instruments[name] = device; self.extra_devices.append(device)
+            device = self.preflight_devices.get(name)
+            if device is None:
+                device = PseudoPump(kind); self.extra_devices.append(device)
+            instruments[name] = device
             file = self.lab / 'config/templates' / (name + '.json')
             template = json.loads(file.read_text()); template['device']['port'] = device.port
             if kind == 'syringe': device.serial_number = template['device']['expected_serial_number']
@@ -134,6 +144,7 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertEqual(self.pump.commands, [])
         if prepared['calibration']['required']:
             self.calibrate(prepared)
+        self.empty_cell(prepared)
         code, result = self.request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']})
         self.assertEqual(code, 202, result)
         return prepared
@@ -142,6 +153,14 @@ class LinuxExecutionTests(unittest.TestCase):
         code, result = self.request('POST', '/api/execution/calibrate', {'run_id': prepared['run_id'], 'version': prepared['version'], 'confirm_discharge': True})
         self.assertEqual(code, 200, result)
         self.wait_for(lambda: self.repo.execution.preparation_status(prepared['run_id'])['calibration']['state']=='passed')
+
+    def empty_cell(self,prepared,route='waste_1',request_id='synthetic_drain'):
+        code,result=self.request('POST','/api/execution/drain',{'run_id':prepared['run_id'],'version':prepared['version'],'route':route,'confirm_discharge':True,'request_id':request_id})
+        self.assertEqual(code,200,result)
+        self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['cell_preparation']['state']=='awaiting_confirmation')
+        code,result=self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})
+        self.assertEqual(code,200,result)
+        self.assertEqual(result['cell_preparation']['state'],'passed')
 
     def test_real_runner_progress_sse_completion_and_duplicate_start(self):
         prepared = self.start()
@@ -232,7 +251,7 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertEqual(self.repo.execution.snapshot()['current']['state'], 'completed')
         self.assertEqual(self.repo.status()['runtime']['completed_steps'], 7)
         self.assertEqual(instruments['valve'].channel, 6)
-        self.assertEqual(instruments['peristaltic_2'].commands.count(0x47), 2)
+        self.assertEqual(instruments['peristaltic_2'].commands.count(0x47), 3)
         self.assertEqual(instruments['peristaltic_3'].commands.count(0x48), 1)
         syringe = instruments['syringe_c']
         self.assertEqual(len(syringe.positions), 2)
@@ -260,7 +279,10 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': first['run_id'], 'version': first['version']})[0], 409)
         self.assertEqual(syringe.commands, [])
         self.assertEqual(self.request('POST', '/api/execution/calibrate', {'run_id': first['run_id'], 'version': first['version'], 'confirm_discharge': False})[0], 422)
+        self.empty_cell(first)
         self.calibrate(first)
+        self.assertEqual(self.repo.execution.preparation_status(first['run_id'])['cell_preparation']['state'],'invalidated')
+        self.assertEqual(self.request('POST','/api/execution/start',{'run_id':first['run_id'],'version':first['version']})[0],409)
         self.assertEqual(syringe.homing_count, 1)
         self.assertNotIn('R', syringe.commands); self.assertNotIn('zR', syringe.commands)
         self.assertEqual(syringe.positions, [])
@@ -274,6 +296,7 @@ class LinuxExecutionTests(unittest.TestCase):
         self.calibrate(second)
         self.assertEqual(self.repo.execution.preparation_status(first['run_id'])['calibration']['state'], 'invalidated')
         self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': first['run_id'], 'version': first['version']})[0], 409)
+        self.empty_cell(second)
         self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': second['run_id'], 'version': second['version']})[0], 202)
         self.wait_for(lambda: self.repo.execution.snapshot()['current']['state']=='completed')
         self.assertEqual(syringe.homing_count, 2)
@@ -287,3 +310,30 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertEqual(self.repo.execution.preparation_status(prepared['run_id'])['calibration']['state'], 'failed')
         self.assertEqual(self.request('POST', '/api/execution/start', {'run_id': prepared['run_id'], 'version': prepared['version']})[0], 409)
         for name in ('peristaltic_1','peristaltic_2','peristaltic_3'):self.assertEqual(instruments[name].commands, [])
+
+    def test_drain_alone_never_authorizes_start_and_duplicate_requests_do_not_repeat_motion(self):
+        _,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        body={'run_id':prepared['run_id'],'version':prepared['version'],'route':'waste_2','confirm_discharge':True,'request_id':'unique_drain_one'}
+        self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],409)
+        self.assertEqual(self.request('POST','/api/execution/drain',body)[0],200)
+        self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['cell_preparation']['state']=='awaiting_confirmation')
+        pump=self.preflight_devices['peristaltic_2']
+        self.assertEqual(pump.commands.count(0x47),1)
+        code,again=self.request('POST','/api/execution/drain',body)
+        self.assertEqual(code,200);self.assertTrue(again['already_started'])
+        self.assertEqual(pump.commands.count(0x47),1)
+        self.assertEqual(self.pump.commands,[])
+        self.assertEqual(self.request('POST','/api/execution/start',{'run_id':prepared['run_id'],'version':prepared['version']})[0],409)
+        self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':False})[0],422)
+        self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],200)
+        self.assertEqual(self.request('POST','/api/execution/start',{'run_id':prepared['run_id'],'version':prepared['version']})[0],202)
+
+    def test_drain_fault_blocks_the_experiment_and_cannot_be_confirmed_empty(self):
+        self.preflight_devices['peristaltic_2'].stop_error=True
+        _,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        self.request('POST','/api/execution/drain',{'run_id':prepared['run_id'],'version':prepared['version'],'route':'waste_1','confirm_discharge':True,'request_id':'failing_drain'})
+        self.wait_for(lambda:not self.repo.execution.snapshot()['current']['controller_alive'])
+        self.assertEqual(self.repo.execution.preparation_status(prepared['run_id'])['cell_preparation']['state'],'failed')
+        self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],409)
+        self.assertEqual(self.request('POST','/api/execution/start',{'run_id':prepared['run_id'],'version':prepared['version']})[0],409)
+        self.assertEqual(self.pump.commands,[])

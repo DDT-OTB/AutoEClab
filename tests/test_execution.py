@@ -187,7 +187,7 @@ class AutomationAuthorizationTests(unittest.TestCase):
 
     def test_viewer_and_anonymous_cannot_prepare_start_or_stop(self):
         with patch.object(self.repo.execution, 'prepare') as prepare, patch.object(self.repo.execution, 'start') as start, patch.object(self.repo.execution, 'stop') as stop:
-            for action in ('prepare', 'start', 'stop', 'calibrate'):
+            for action in ('prepare', 'start', 'stop', 'calibrate', 'drain', 'confirm-empty'):
                 self.assertEqual(self.request('POST', '/api/execution/' + action, {}, role='viewer')[0], 403)
                 self.assertEqual(self.request('POST', '/api/execution/' + action, {}, role=None)[0], 401)
             prepare.assert_not_called(); start.assert_not_called(); stop.assert_not_called()
@@ -195,7 +195,7 @@ class AutomationAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/execution', role=None)[0], 401)
 
     def test_admin_still_requires_csrf_request_protection_and_exact_fields(self):
-        for action in ('prepare', 'start', 'stop', 'calibrate'):
+        for action in ('prepare', 'start', 'stop', 'calibrate', 'drain', 'confirm-empty'):
             path = '/api/execution/' + action
             self.assertEqual(self.request('POST', path, {}, csrf=False)[0], 403)
             self.assertEqual(self.request('POST', path, {}, protection=False)[0], 403)
@@ -217,3 +217,8 @@ class AutomationAuthorizationTests(unittest.TestCase):
         self.assertTrue(any(row['event'] == 'automation_start_requested' for row in audit))
         self.assertTrue(all(row['username'] == 'synthetic_admin' for row in audit))
         self.assertIsNone(self.repo.execution.snapshot()['current'])
+
+    def test_client_cannot_override_capacity_or_skip_startup_preparation(self):
+        self.assertEqual(self.request('POST','/api/execution/prepare',{'sequence':self.sequence,'safety_policy':{'capacity_ml':1000}})[0],400)
+        _,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        self.assertEqual(self.request('POST','/api/execution/start',{'run_id':prepared['run_id'],'version':prepared['version'],'skip_preflight':True})[0],400)

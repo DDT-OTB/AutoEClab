@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "cell": {
+    "capacity_ml": 40,
+    "initial_state": "operator_confirmed_empty",
+    "predrain_volume_ml": 40,
+    "drain_device": "peristaltic_2",
+    "valve_device": "valve",
+    "allowed_waste_routes": ["waste_1", "waste_2"],
+    "require_operator_empty_confirmation": true
+  }
+}

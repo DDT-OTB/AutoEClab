@@ -19,6 +19,7 @@ import AccountManagement from './AccountManagement.jsx';
 import ExperimentManager from './ExperimentManager.jsx';
 import AutomationControl from './AutomationControl.jsx';
 import { sequenceKey } from './automation.js';
+import { cellVolumes } from './cellSafety.js';
 import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
 const emptyDraft = () => ({
@@ -76,6 +77,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const editorSnapshot = useRef({draft,base,dirty});
   editorSnapshot.current={draft,base,dirty};
   const sequence = useMemo(() => toSequence(draft), [draft]);
+  const cellBudget=useMemo(()=>cellVolumes(sequence,undefined,actionTemplates),[sequence,actionTemplates]);
   const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
   const jsonText = useMemo(() => JSON.stringify(sequence, null, 2), [sequence]);
   const latestJson = useRef(jsonText);
@@ -292,7 +294,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       </header>
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
-        <AutomationControl user={user} sequence={sequence} status={status} health={health} fresh={fresh} errors={errors} measurementCount={measurementCount} busy={busy} names={names} onPlan={setPlan} onRefresh={refresh} onStarted={value=>setSubmittedSequence(sequenceKey(value))}/>
+        <AutomationControl templates={actionTemplates} user={user} sequence={sequence} status={status} health={health} fresh={fresh} errors={errors} measurementCount={measurementCount} busy={busy} names={names} onPlan={setPlan} onRefresh={refresh} onStarted={value=>setSubmittedSequence(sequenceKey(value))}/>
         <LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names} />
         {activeNav==='experiments' ? <ExperimentManager items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setActiveNav('editor')} onChanged={fileChanged}/> : <>
         <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
@@ -318,6 +320,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
                 onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (dragIndex !== null) reorder(dragIndex,index); setDragIndex(null); }}>
                 <div className="timeline-number">{String(index+1).padStart(2,'0')}</div>
                 <FlowStep step={step} index={index} template={actionTemplates[step.device]} title={shortNames[step.device] || step.device}
+                  cellVolume={cellBudget.steps[index]} cellCapacity={cellBudget.capacity_ml}
                   selected={selected===step._key} running={runningIndex===index} total={draft.steps.length}
                   onSelect={() => selectAction(step._key)} onMove={reorder} onCopy={() => copyAction(step._key)} onDelete={() => deleteAction(step._key)}
                   onDragStart={event => { event.dataTransfer.setData('text/plain',String(index)); setDragIndex(index); }}

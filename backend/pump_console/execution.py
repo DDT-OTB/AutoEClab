@@ -14,6 +14,7 @@ import threading
 
 from .repository import ApiError, parse_json
 from .runtime import active_controller, timestamp
+from .cell_safety import drain_sequence, load_policy, require_safe_volumes
 
 ACTIVE_STATES = {"starting", "running", "stopping"}
 TERMINAL_STATES = {"completed", "stopped", "failed"}
@@ -127,7 +128,7 @@ class ExecutionManager:
         now = datetime.now(timezone.utc)
         run_id = now.strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(6)
         snapshot = {'schema_version': 1, 'sequence': sequence, 'devices': devices, 'templates': templates, 'plan': plan,
-                    'operation': operation, 'target_run_id': target_run_id}
+                    'operation': operation, 'target_run_id': target_run_id, 'safety_policy': load_policy()}
         fingerprint = version(snapshot)
         with self.lock:
             folder = self._folder(run_id)
@@ -136,7 +137,9 @@ class ExecutionManager:
             write_private(folder / 'snapshot.json', snapshot)
             job = {'run_id': run_id, 'sequence_id': sequence['id'], 'version': fingerprint,
                    'operation': operation, 'target_run_id': target_run_id,
-                   'discharge_confirmed': operation == 'calibrate_syringe',
+                   'discharge_confirmed': operation in ('calibrate_syringe', 'drain_cell'),
+                   'preflight_run_ids': [], 'cell_drain_run_id': None, 'cell_waste_route': None,
+                   'cell_empty_confirmed_at': None, 'cell_empty_confirmed_by': None, 'cell_preparation_consumed_at': None,
                    'requires_syringe_calibration': operation == 'sequence' and any(step['device'] == 'syringe_c' for step in plan['steps']),
                    'calibration_run_id': None, 'calibration_consumed_at': None,
                    'prepared_by': actor, 'prepared_at': now.isoformat(), 'state': 'prepared',
@@ -145,6 +148,7 @@ class ExecutionManager:
             write_private(folder / 'job.json', job)
         return {'run_id': run_id, 'version': fingerprint, 'sequence': sequence, 'preview': preview,
                 'operation': operation, 'calibration': self._calibration_state(folder, job),
+                'cell_preparation': self._cell_state(folder, job),
                 'prepared_at': now.isoformat(), 'expires_in_seconds': self.policy['prepare_ttl_seconds'], 'hardware_executed': False}
 
     def _calibration_state(self, folder, job):
@@ -176,15 +180,107 @@ class ExecutionManager:
         _, current = self._current()
         completed = timestamp(worker.get('finished_at'))
         expired = completed is None or (datetime.now(timezone.utc) - completed).total_seconds() > self.policy['prepare_ttl_seconds']
-        externally_changed = completed is not None and any(path.stat().st_mtime > completed.timestamp() for path in self.repository.logs_dir.glob('run-*.jsonl') if path.stem != 'run-' + run_id)
-        if not current or current['run_id'] != run_id or calibration_job.get('target_run_id') != job['run_id'] or expired or externally_changed:
+        allowed = {'run-' + value for value in job.get('preflight_run_ids', [])} | {'run-' + run_id}
+        externally_changed = completed is not None and any(path.stat().st_mtime > completed.timestamp() for path in self.repository.logs_dir.glob('run-*.jsonl') if path.stem not in allowed)
+        current_allowed = current and (current['run_id'] == run_id or (current.get('operation') == 'drain_cell' and current.get('target_run_id') == job['run_id']))
+        if not current_allowed or calibration_job.get('target_run_id') != job['run_id'] or expired or externally_changed:
             return {**result, 'state': 'invalidated', 'message': '校验后已有其他任务或校验已过期，请重新校验。'}
         return {**result, 'state': 'passed', 'completed_at': worker['finished_at']}
 
     def preparation_status(self, run_id):
         with self.lock:
             folder, job = self._job(run_id)
-            return {'run_id': run_id, 'calibration': self._calibration_state(folder, job)}
+            return {'run_id': run_id, 'calibration': self._calibration_state(folder, job), 'cell_preparation': self._cell_state(folder, job)}
+
+    def _cell_state(self, folder, job):
+        required = job.get('operation', 'sequence') == 'sequence'
+        result = {'required': required, 'state': 'required' if required else 'not_required', 'run_id': job.get('cell_drain_run_id'),
+                  'volume_measured': False, 'confirmation_source': 'operator', 'route': job.get('cell_waste_route')}
+        if not required:
+            return result
+        if job.get('cell_preparation_consumed_at'):
+            return {**result, 'state': 'consumed', 'confirmed_at': job.get('cell_empty_confirmed_at')}
+        run_id = job.get('cell_drain_run_id')
+        if not run_id:
+            return result
+        drain_folder, drain_job = self._job(run_id)
+        summary = self._summary(drain_folder, drain_job)
+        if summary['controller_alive']:
+            return {**result, 'state': 'running'}
+        try:
+            worker = parse_json((drain_folder / 'worker.json').read_bytes())
+        except FileNotFoundError:
+            worker = {}
+        if drain_job['state'] == 'prepared':
+            return result
+        if summary['state'] != 'completed' or worker.get('cell_drain_completed') is not True:
+            return {**result, 'state': 'failed', 'message': summary.get('message')}
+        _, current = self._current()
+        completed = timestamp(worker.get('finished_at'))
+        changed = completed is None or any(path.stat().st_mtime > completed.timestamp() for path in self.repository.logs_dir.glob('run-*.jsonl') if path.stem != 'run-' + run_id)
+        expired = completed is None or (datetime.now(timezone.utc) - completed).total_seconds() > self.policy['prepare_ttl_seconds']
+        if not current or current['run_id'] != run_id or drain_job.get('target_run_id') != job['run_id'] or changed or expired:
+            return {**result, 'state': 'invalidated', 'message': '排空后有其他控制操作或记录过期，需重新排空并确认。'}
+        return {**result, 'state': 'passed' if job.get('cell_empty_confirmed_at') else 'awaiting_confirmation',
+                'confirmed_at': job.get('cell_empty_confirmed_at'), 'confirmed_by': job.get('cell_empty_confirmed_by'), 'drain_completed_at': worker['finished_at']}
+
+    def _prepared_snapshot(self, run_id, expected_version):
+        folder, job = self._job(run_id)
+        if job['state'] != 'prepared' or job['version'] != expected_version:
+            raise ApiError(409, '方案准备记录已变化，请重新准备。', 'version_conflict')
+        snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+        if version(snapshot) != expected_version or snapshot.get('safety_policy') != load_policy():
+            raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
+        if version(self._templates()[1]) != job['templates_version']:
+            raise ApiError(409, '设备模板已更新，请重新准备。', 'templates_changed')
+        if not 0 <= (datetime.now(timezone.utc) - timestamp(job['prepared_at'])).total_seconds() <= self.policy['prepare_ttl_seconds']:
+            raise ApiError(409, '准备记录已过期，请重新准备。', 'preparation_expired')
+        return folder, job, snapshot
+
+    def drain_cell(self, run_id, expected_version, actor, route, confirm_discharge, request_id):
+        self._enabled()
+        if confirm_discharge is not True:
+            raise ApiError(422, '请先确认废液流路和接液条件。', 'discharge_confirmation_required')
+        if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', request_id):
+            raise ApiError(400, 'Invalid drain request ID')
+        with self.lock:
+            folder, job, snapshot = self._prepared_snapshot(run_id, expected_version)
+            status = self._cell_state(folder, job)
+            previous = job.get('cell_drain_requests', {}).get(request_id)
+            if previous:
+                if previous['route'] != route:
+                    raise ApiError(409, '同一排空请求不能更改废液流路。', 'version_conflict')
+                return {'run_id': run_id, 'accepted': True, 'already_started': True, 'cell_preparation': status}
+            if status['state'] == 'running':
+                raise ApiError(409, '本次排空正在执行，请等待完成。', 'execution_busy')
+            try:
+                sequence = drain_sequence(snapshot['safety_policy'], route)
+                preview = self.repository.preview(sequence, _templates=(snapshot['devices'], snapshot['templates']))
+            except ValueError as error:
+                raise ApiError(422, str(error), 'invalid_waste_route') from error
+            if preview['plan']['unresolved'] or not preview['plan']['ready_for_hardware']:
+                raise ApiError(422, '启动前排空参数不完整：' + '; '.join(preview['plan']['unresolved']), 'configuration_incomplete')
+            prepared = self._store_preparation(sequence, snapshot['devices'], snapshot['templates'], preview, actor, operation='drain_cell', target_run_id=run_id)
+            job.update(cell_drain_run_id=prepared['run_id'], cell_waste_route=route, cell_empty_confirmed_at=None, cell_empty_confirmed_by=None)
+            job.setdefault('cell_drain_requests', {})[request_id] = {'run_id': prepared['run_id'], 'route': route}
+            job.setdefault('preflight_run_ids', []).append(prepared['run_id'])
+            write_private(folder / 'job.json', job)
+            result = self.start(prepared['run_id'], prepared['version'], actor)
+            return {**result, 'run_id': run_id, 'cell_preparation': self._cell_state(folder, job)}
+
+    def confirm_empty(self, run_id, expected_version, actor, empty_confirmed):
+        self._enabled()
+        if empty_confirmed is not True:
+            raise ApiError(422, '必须现场确认电解池已排空。', 'empty_confirmation_required')
+        with self.lock:
+            folder, job, _ = self._prepared_snapshot(run_id, expected_version)
+            status = self._cell_state(folder, job)
+            if status['state'] not in ('awaiting_confirmation', 'passed'):
+                raise ApiError(409, '本次排空动作尚未成功完成，不能确认空池。', 'cell_preparation_required')
+            if status['state'] != 'passed':
+                job.update(cell_empty_confirmed_at=datetime.now(timezone.utc).isoformat(), cell_empty_confirmed_by=actor)
+                write_private(folder / 'job.json', job)
+            return {'run_id': run_id, 'cell_preparation': self._cell_state(folder, job)}
 
     def calibrate(self, run_id, expected_version, actor, confirm_discharge):
         self._enabled()
@@ -200,6 +296,8 @@ class ExecutionManager:
             if calibration['state'] in ('running', 'passed'):
                 return {'run_id': run_id, 'accepted': True, 'already_started': True, 'calibration': calibration}
             snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+            if snapshot.get('safety_policy') != load_policy():
+                raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
             if version(snapshot) != expected_version or version(self._templates()[1]) != job['templates_version']:
                 raise ApiError(409, '方案或设备模板已变化，请重新准备。', 'templates_changed')
             if (datetime.now(timezone.utc) - timestamp(job['prepared_at'])).total_seconds() > self.policy['prepare_ttl_seconds']:
@@ -211,6 +309,7 @@ class ExecutionManager:
                 {'plan': plan, 'valid': True, 'estimated_timed_seconds': None, 'hardware_executed': False, 'warnings': []},
                 actor, operation='calibrate_syringe', target_run_id=run_id)
             job['calibration_run_id'] = prepared['run_id']
+            job.setdefault('preflight_run_ids', []).append(prepared['run_id'])
             write_private(folder / 'job.json', job)
             result = self.start(prepared['run_id'], prepared['version'], actor)
             return {**result, 'run_id': run_id, 'calibration': self._calibration_state(folder, job)}
@@ -238,6 +337,7 @@ class ExecutionManager:
         return {key: job.get(key) for key in ('run_id', 'sequence_id', 'prepared_by', 'started_by', 'started_at', 'stop_requested_at', 'stop_requested_by', 'operation', 'target_run_id')} | {
             'state': state, 'controller_alive': alive, 'can_stop': alive and state not in TERMINAL_STATES,
             'syringe_calibration_passed': bool(job.get('calibration_consumed_at')),
+            'cell_preparation_passed': bool(job.get('cell_preparation_consumed_at')),
             'message': message, 'finished_at': worker.get('finished_at'), 'cleanup_failed': worker.get('cleanup_failed', False),
             'exit_code': worker.get('exit_code'), 'stop_requested': bool(job.get('stop_requested_at'))}
 
@@ -293,15 +393,24 @@ class ExecutionManager:
                 raise ApiError(409, '准备内容发生变化，请重新检查方案。', 'version_conflict')
             if version(self._templates()[1]) != job['templates_version']:
                 raise ApiError(409, '设备模板已更新，请重新准备运行。', 'templates_changed')
+            if snapshot.get('safety_policy') != load_policy():
+                raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
+            if snapshot.get('operation', 'sequence') == 'sequence':
+                require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
             self._check_ports(snapshot['devices'], snapshot['plan'])
             calibration = self._calibration_state(folder, job)
             if calibration['required'] and calibration['state'] != 'passed':
                 raise ApiError(409, '本次实验尚未完成注射泵回零校验，请先确认排液条件并执行校验。', 'syringe_calibration_required')
+            cell_preparation = self._cell_state(folder, job)
+            if cell_preparation['required'] and cell_preparation['state'] != 'passed':
+                raise ApiError(409, '本次实验尚未完成启动前排空和人工空池确认。', 'cell_preparation_required')
             if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
                 raise ApiError(503, '执行服务需要支持进程身份保护的 Linux 环境。', 'execution_unavailable')
             job.update(state='starting', started_by=actor, started_at=datetime.now(timezone.utc).isoformat())
             if calibration['required']:
                 job['calibration_consumed_at'] = calibration['completed_at']
+            if cell_preparation['required']:
+                job['cell_preparation_consumed_at'] = datetime.now(timezone.utc).isoformat()
             write_private(folder / 'job.json', job)
             write_private(self.directory / 'current.json', {'run_id': run_id})
             environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1]), 'PYTHONUNBUFFERED': '1'}

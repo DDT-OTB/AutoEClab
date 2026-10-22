@@ -14,7 +14,7 @@ const {AutomationControl,ExecutionConfirmation}=module.exports;
 const render=(component,props)=>renderToStaticMarkup(React.createElement(component,props));
 const sequence={schema_version:2,id:'synthetic_run',description:'Synthetic automation',steps:[{device:'peristaltic_1',operation:'inject',fluid:'water',volume_ml:1}]};
 const settings={user:{role:'admin'},enabled:true,fresh:true,runtime:{state:'idle'},errors:[]};
-const prepared={run_id:'synthetic-id',sequence,preview:{estimated_timed_seconds:5,plan:{steps:[{...sequence.steps[0],id:'step_01',rpm:100}]}}};
+const prepared={run_id:'synthetic-id',sequence,cell_preparation:{required:true,state:'passed'},preview:{estimated_timed_seconds:5,plan:{steps:[{...sequence.steps[0],id:'step_01',rpm:100}]}}};
 
 test('only a connected administrator with a supported valid plan can prepare automation',()=>{
   assert.equal(automationAvailability(settings).allowed,true);

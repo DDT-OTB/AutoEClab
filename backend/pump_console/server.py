@@ -14,6 +14,7 @@ from .auth import AuthStore, COOKIE_NAME, SECURE_COOKIE_NAME
 from .access import AccessPolicy
 from .measurement import measurement_templates
 from .repository import ApiError, LabRepository, parse_json
+from .cell_safety import load_policy
 
 
 def make_server(host, port, repository, static_root, auth, access=None):
@@ -124,7 +125,7 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     if path == "/api/health":
                         return self.json_response(200, repository.health())
                     if path == "/api/templates":
-                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates()})
+                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(), "safety_policy": load_policy()})
                     if path == "/api/status":
                         return self.json_response(200, repository.status())
                     if path == "/api/experiments":
@@ -255,10 +256,14 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         with auth.db() as db:
                             auth.audit(db, "experiment_" + parts[1] + "/" + parts[0], session["user"]["username"], self.request_peer)
                         return self.json_response(200, result)
-                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate'):
+                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty'):
                     self.require_admin(session)
                     payload = self.body()
-                    expected = {'sequence'} if path.endswith('/prepare') else {'run_id', 'version', 'confirm_discharge'} if path.endswith('/calibrate') else {'run_id', 'version'} if path.endswith('/start') else {'run_id'}
+                    schemas = {'prepare': {'sequence'}, 'start': {'run_id', 'version'}, 'stop': {'run_id'},
+                               'calibrate': {'run_id', 'version', 'confirm_discharge'},
+                               'drain': {'run_id', 'version', 'route', 'confirm_discharge', 'request_id'},
+                               'confirm-empty': {'run_id', 'version', 'empty_confirmed'}}
+                    expected = schemas[path.rsplit('/', 1)[-1]]
                     if not isinstance(payload, dict) or set(payload) != expected:
                         raise ApiError(400, 'Invalid automation request fields')
                     auth.session(token, touch=True)
@@ -272,6 +277,10 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         result = repository.execution.start(payload['run_id'], payload['version'], actor)
                     elif action == 'calibrate':
                         result = repository.execution.calibrate(payload['run_id'], payload['version'], actor, payload['confirm_discharge'])
+                    elif action == 'drain':
+                        result = repository.execution.drain_cell(payload['run_id'], payload['version'], actor, payload['route'], payload['confirm_discharge'], payload['request_id'])
+                    elif action == 'confirm-empty':
+                        result = repository.execution.confirm_empty(payload['run_id'], payload['version'], actor, payload['empty_confirmed'])
                     else:
                         result = repository.execution.stop(payload['run_id'], actor)
                     with auth.db() as db:

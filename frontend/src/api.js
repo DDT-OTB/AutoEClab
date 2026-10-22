@@ -59,6 +59,8 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     prepareExecution: sequence => request('/api/execution/prepare', { method: 'POST', body: JSON.stringify({sequence}) }),
     preparation: run_id => request('/api/execution/preparations/' + encodeURIComponent(run_id)),
     calibrateExecution: (run_id, version, confirm_discharge) => request('/api/execution/calibrate', { method: 'POST', body: JSON.stringify({run_id, version, confirm_discharge}) }),
+    drainCell: (run_id, version, route, confirm_discharge, request_id) => request('/api/execution/drain', {method:'POST',body:JSON.stringify({run_id,version,route,confirm_discharge,request_id})}),
+    confirmEmpty: (run_id, version, empty_confirmed) => request('/api/execution/confirm-empty', {method:'POST',body:JSON.stringify({run_id,version,empty_confirmed})}),
     startExecution: (run_id, version) => request('/api/execution/start', { method: 'POST', body: JSON.stringify({run_id, version}) }),
     stopExecution: run_id => request('/api/execution/stop', { method: 'POST', body: JSON.stringify({run_id}) }),
     preview: sequence => request('/api/preview', { method: 'POST', body: JSON.stringify({ sequence }) }),

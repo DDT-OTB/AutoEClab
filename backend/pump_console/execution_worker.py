@@ -10,6 +10,7 @@ import sys
 from .execution import RUN_ID, initialization_plan, version, write_private
 from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
+from .cell_safety import drain_sequence, load_policy, require_safe_volumes
 
 
 def execute(lab_root, run_directory, run_id, runner_factory=None):
@@ -28,8 +29,20 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     compiler = importlib.import_module('lab_automation.templates')
     controller = importlib.import_module('lab_automation.__main__')
     operation = snapshot.get('operation', 'sequence')
-    if operation not in ('sequence', 'calibrate_syringe'):
+    if operation not in ('sequence', 'calibrate_syringe', 'drain_cell'):
         raise ValueError('Unsupported controller operation')
+    if snapshot.get('safety_policy') != load_policy():
+        raise ValueError('Safety policy changed; prepare the experiment again')
+    if operation == 'sequence':
+        require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
+        if not job.get('cell_preparation_consumed_at') or not job.get('cell_empty_confirmed_at'):
+            raise ValueError('Experiment has no completed drain and operator empty-cell confirmation')
+    if operation == 'drain_cell':
+        if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
+            raise ValueError('Drain requires explicit discharge confirmation')
+        route = snapshot['sequence']['steps'][0]['route']
+        if snapshot['sequence'] != drain_sequence(snapshot['safety_policy'], route):
+            raise ValueError('Startup drain does not match the server safety policy')
     if operation == 'sequence' and any(step['device'] == 'syringe_c' for step in snapshot['plan']['steps']) and not job.get('calibration_consumed_at'):
         raise ValueError('This syringe experiment has no verified calibration certificate')
     if operation == 'calibrate_syringe':
@@ -46,13 +59,28 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     serial_requests = 0
     stop_requested = False
     journal = None
+    completed_step_count = 0
+    active_plan_step = None
 
     def publish(**fields):
         state.update(fields, updated_at=datetime.now(timezone.utc).isoformat())
         write_private(folder / 'worker.json', state)
 
     def event(kind, **fields):
-        nonlocal cleanup_failed, serial_requests
+        nonlocal cleanup_failed, serial_requests, completed_step_count, active_plan_step
+        if operation == 'sequence' and kind == 'step_started':
+            if load_policy() != snapshot['safety_policy']:
+                raise ValueError('Cell safety policy changed during execution')
+            if active_plan_step is not None or completed_step_count >= len(plan['steps']) or fields.get('step') != plan['steps'][completed_step_count]:
+                raise ValueError('Controller step does not match the validated sequence')
+            active_plan_step = fields['step']
+        if operation == 'sequence' and kind == 'step_completed':
+            if active_plan_step is None or fields.get('id') != active_plan_step['id']:
+                raise ValueError('Controller completion does not match the active step')
+            completed_step_count += 1
+            active_plan_step = None
+        if operation == 'sequence' and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
+            raise ValueError('Controller reported completion before all validated steps finished')
         if kind in ('serial_reply', 'serial_error'):
             serial_requests += 1
         if kind == 'stop_failed':
@@ -84,10 +112,13 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                     else:
                         factory = runner_factory or controller.Runner
                         factory(snapshot['devices']['devices'], plan, event).run()
+                        if operation == 'drain_cell':
+                            publish(cell_drain_completed=True)
                 finally:
                     journal.close()
                     journal = None
-        publish(state='completed', message='本次实验的注射泵回零校验已通过。' if operation == 'calibrate_syringe' else '全部步骤执行完成。', exit_code=0)
+        message = '本次实验的注射泵回零校验已通过。' if operation == 'calibrate_syringe' else '启动前排液动作完成，等待管理员现场确认空池。' if operation == 'drain_cell' else '全部步骤执行完成。'
+        publish(state='completed', message=message, exit_code=0)
         code = 0
     except BaseException as error:
         stop_requested = isinstance(error, (controller.RunInterrupted, KeyboardInterrupt))

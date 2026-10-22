@@ -1,4 +1,5 @@
 import { cvErrors, isMeasurement } from './cv.js';
+import { cellVolumes, defaultSafetyPolicy } from './cellSafety.js';
 export const fluidLabels = { water: '超纯水', waste_liquid: '废液', sulfuric_acid: '硫酸', electrolyte: '电解液' };
 export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量' };
 let nextKey = 1;
@@ -30,7 +31,7 @@ export function moveStep(steps, from, to) {
   result.splice(to, 0, item);
   return result;
 }
-export function draftErrors(draft, templates) {
+export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) {
   const errors = [];
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(draft.id)) errors.push('方案 ID 请使用字母开头的英文、数字、下划线或短横线。');
   if (/[\u3400-\u9fff]/.test(JSON.stringify(toSequence(draft)))) errors.push('保存的 JSON 内容请使用英文。');
@@ -55,7 +56,7 @@ export function draftErrors(draft, templates) {
       if (template.device.kind === 'syringe' && step.volume_ml > template.device.capacity_ml) errors.push(prefix + '超出注射泵容量。');
     }
   });
-  return errors;
+  return [...errors,...cellVolumes(draft,safetyPolicy,templates).errors];
 }
 export function formatDuration(seconds) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '待预演';

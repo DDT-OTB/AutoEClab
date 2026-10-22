@@ -14,6 +14,7 @@ import threading
 from .runtime import RuntimeMonitor, timestamp
 from .status_refresh import RefreshBusy, StatusRefresh
 from .measurement import compile_workflow, is_measurement, measurement_templates
+from .cell_safety import CellSafetyError, load_policy, require_safe_volumes
 
 
 class ApiError(Exception):
@@ -74,10 +75,12 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.8.1",
+            "ok": True, "service": "pump-console", "version": "0.9.0",
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
             "automation_administrator_required": True,
             "syringe_calibration_required_before_each_experiment": True,
+            "cell_capacity_ml": load_policy()['cell']['capacity_ml'],
+            "cell_preparation_required_before_each_experiment": True,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
             "measurement_execution_enabled": False,
@@ -98,6 +101,10 @@ class LabRepository:
             plan = compile_workflow(sequence, devices, templates, self.compiler, self.config)
         except (ValueError, KeyError, TypeError) as error:
             raise ApiError(422, str(error), "validation_error") from error
+        try:
+            cell_safety = require_safe_volumes(sequence, load_policy(), plan)
+        except CellSafetyError as error:
+            raise ApiError(422, str(error), 'cell_capacity_exceeded') from error
         timing = sum(
             step.get("duration_s") or step.get("estimated_movement_s") or step.get("estimated_measurement_s") or step.get("seconds") or 0
             for step in plan["steps"])
@@ -107,6 +114,7 @@ class LabRepository:
             if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in sequence["steps"]):
                 warnings.append("部分测量动作尚未指定参比电极；当前电位参数仅为编排草稿。")
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
+                "cell_safety": cell_safety, "safety_policy": load_policy(),
                 "hardware_executed": False, "generated_at": utc_now()}
 
     def _sequence_path(self, name):

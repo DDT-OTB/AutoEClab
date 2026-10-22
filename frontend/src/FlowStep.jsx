@@ -8,7 +8,7 @@ export function ActionIcon({ kind, size = 20 }) {
     kind === 'valve' ? <SlidersHorizontal size={size} /> : kind === 'syringe' ? <ArrowDownToLine size={size} /> : <Droplet size={size} />;
 }
 
-export default function FlowStep({ step, index, template, title, selected, running, total, onSelect, onMove, onCopy, onDelete, onDragStart, onDragEnd }) {
+export default function FlowStep({ step, index, template, title, selected, running, total, onSelect, onMove, onCopy, onDelete, onDragStart, onDragEnd,cellVolume,cellCapacity }) {
   const measurement = isMeasurement(step);
   return <article className={'step-card fluid-' + (measurement ? 'measurement' : step.fluid || 'valve') +
       (selected ? ' selected' : '') + (running ? ' step-running' : '')}>
@@ -19,6 +19,7 @@ export default function FlowStep({ step, index, template, title, selected, runni
         {measurement ? <span className="measurement-draft-tag">预留</span> : step.fluid && <span className="fluid-tag">{fluidLabels[step.fluid] || step.fluid}</span>}
         {running && <span className="live-step-tag"><span className="status-dot green pulse-dot" />执行中</span>}</span>
         <span className="step-brief">{stepSummary(step,template)}</span>
+        {cellVolume && <small className={'cell-step-volume '+(cellVolume.over_capacity?'over-capacity':'')}>预计池内 {cellVolume.after_ml} / {cellCapacity} mL</small>}
       </span>
     </button>
     <div className="step-actions">
