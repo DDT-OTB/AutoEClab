@@ -125,8 +125,9 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     if path == "/api/health":
                         return self.json_response(200, repository.health())
                     if path == "/api/function-blocks":
-                        from .workflow import function_block_templates
-                        return self.json_response(200, {"blocks": function_block_templates()})
+                        return self.json_response(200, repository.block_library.list())
+                    if path.startswith('/api/function-blocks/'):
+                        return self.json_response(200, repository.block_library.get(path.removeprefix('/api/function-blocks/')))
                     if path == "/api/templates":
                         return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(), "safety_policy": load_policy()})
                     if path == "/api/status":
@@ -259,6 +260,18 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         with auth.db() as db:
                             auth.audit(db, "experiment_" + parts[1] + "/" + parts[0], session["user"]["username"], self.request_peer)
                         return self.json_response(200, result)
+                if path == '/api/function-blocks' or path.startswith('/api/function-blocks/'):
+                    self.require_admin(session)
+                    original_id = path.removeprefix('/api/function-blocks/') if path != '/api/function-blocks' else None
+                    payload = self.body()
+                    fields = {'block', 'expected_version'} if original_id is not None else {'block'}
+                    if not isinstance(payload, dict) or set(payload) != fields:
+                        raise ApiError(400, 'Expected a block document and, for updates, its current version')
+                    auth.session(token, touch=True)
+                    result = repository.block_library.save(payload['block'], original_id, payload.get('expected_version'))
+                    with auth.db() as db:
+                        auth.audit(db, 'function_block_saved/' + result['id'], session['user']['username'], self.request_peer)
+                    return self.json_response(200, result)
                 if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty'):
                     self.require_admin(session)
                     payload = self.body()
@@ -317,17 +330,18 @@ def make_server(host, port, repository, static_root, auth, access=None):
                 session = auth.session(token)
                 auth.csrf(session, self.headers.get("X-CSRF-Token"))
                 path = unquote(urlsplit(self.path).path)
-                if not path.startswith("/api/experiments/"):
+                block_resource = path.startswith('/api/function-blocks/')
+                if not block_resource and not path.startswith("/api/experiments/"):
                     raise ApiError(405, "Deletion is not enabled for this resource", "method_not_allowed")
                 self.require_admin(session)
                 payload = self.body(8192)
                 if not isinstance(payload, dict) or set(payload) != {"expected_version"}:
                     raise ApiError(400, "Expected the current file version")
                 auth.session(token, touch=True)
-                name = path.removeprefix("/api/experiments/")
-                result = repository.delete_experiment(name, payload["expected_version"])
+                name = path.removeprefix('/api/function-blocks/' if block_resource else '/api/experiments/')
+                result = repository.block_library.delete(name, payload['expected_version']) if block_resource else repository.delete_experiment(name, payload["expected_version"])
                 with auth.db() as db:
-                    auth.audit(db, "experiment_deleted/" + name, session["user"]["username"], self.request_peer)
+                    auth.audit(db, ('function_block_deleted/' if block_resource else 'experiment_deleted/') + name, session["user"]["username"], self.request_peer)
                 self.json_response(200, result)
             except ApiError as error:
                 self.failure(error)

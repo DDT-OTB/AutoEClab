@@ -1,0 +1,72 @@
+.palette-library-manage,.block-save-template {display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid #ccdcc2;background:#f0f6ea;color:#507b3c;border-radius:5px;padding:9px 7px;font-size:11px}
+.palette-library-manage {width:100%;margin-bottom:12px}
+.block-save-template {margin:9px 0 7px}
+.block-template-row {display:grid;grid-template-columns:minmax(0,1fr);min-width:0;margin-bottom:8px}
+.block-template-row.managed {grid-template-columns:minmax(0,1fr) 25px;gap:4px}
+.experiment-section .palette .block-template-row>.palette-item {margin:0}
+.managed .block-template>.lucide-plus {display:none}
+.block-template-edit {display:grid;place-items:center;border:1px solid #dce7d3;border-radius:5px;color:#8aa176;background:#f8faf4}
+.block-template-edit:hover {color:#4c7738;background:#eaf3df}
+.modal.block-library-dialog {display:flex;flex-direction:column;padding:0;width:min(1100px,calc(100vw - 32px));max-width:none;height:min(800px,calc(100dvh - 40px));max-height:none;overflow:hidden}
+.block-library-dialog .modal-header {padding:19px 22px 12px;margin:0;flex-shrink:0}
+.block-library-dialog .modal-header h2 {display:flex;align-items:center;gap:8px;font-size:17px}
+.library-intro {margin:0;padding:0 22px 16px;font-size:11px;line-height:1.8;color:#8a9b7c;flex-shrink:0}
+.library-workspace {display:grid;grid-template-columns:235px minmax(0,1fr);flex:1;min-height:0;border-top:1px solid var(--line)}
+.library-list-panel {min-width:0;min-height:0;display:flex;flex-direction:column;background:#f8faf5;border-right:1px solid var(--line)}
+.library-list-toolbar {display:flex;align-items:center;justify-content:space-between;gap:5px;padding:13px 12px 8px}
+.library-list-toolbar button {display:flex;align-items:center;gap:4px;color:#698854;font-size:11px;padding:5px}
+.library-search {display:flex;align-items:center;gap:6px;color:#a2b394;border:1px solid #dce7d4;background:#fff;border-radius:5px;padding:8px;margin:0 13px 9px}
+.library-search input {width:100%;min-width:0;border:0;background:transparent;padding:0;color:#6b8658;font-size:11px;outline:none}
+.library-entry-list {overflow:auto;min-height:0;flex:1;padding:0 8px 12px;overscroll-behavior:auto}
+.library-entry-list>p {font-size:11px;color:#a2ad98;padding:14px;line-height:1.8}
+.library-entry-list>button {display:block;width:100%;text-align:left;border-radius:6px;border:1px solid transparent;padding:11px 10px;margin:3px 0;overflow-wrap:anywhere}
+.library-entry-list>button.selected {background:#eaf2e1;border-color:#cbdcbc}
+.library-entry-list>button:hover {background:#f0f5e8}
+.library-entry-list strong {display:block;font-size:12px;color:#557b3e;font-weight:600}
+.library-entry-list span {display:block;margin-top:6px;font-size:10px;line-height:1.7;color:#93a286}
+.library-entry-list small {display:block;font-size:9px;color:#9eac92;margin-top:7px}
+.library-template-form {display:flex;flex-direction:column;min-height:0;min-width:0}
+.library-editor-heading {display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 19px;border-bottom:1px solid #e9efdf;color:#64864e;font-size:12px;overflow-wrap:anywhere}
+.library-editor-heading span {font-size:10px;color:#a1ac95;flex-shrink:0}
+.library-editor-body {display:block;margin:0;border:0;padding:0;min-width:0;min-height:0;overflow:auto;overscroll-behavior:auto;flex:1}
+.library-template-fields {padding:4px 20px 20px}
+.library-add-action {display:flex;gap:8px;align-items:center;border-top:1px solid #e7eedc;padding-top:17px;margin:20px 0 16px}
+.library-add-action select {min-width:0;flex:1;font-size:12px;color:#6b8957;border:1px solid #dce6d2;border-radius:5px;padding:8px;background:#fbfcf8}
+.library-add-action button {display:flex;align-items:center;gap:4px;font-size:11px;border:1px solid #d5e3ca;border-radius:5px;padding:9px;color:#63864e;white-space:nowrap}
+.library-action-list .step-card {min-width:0;flex-wrap:wrap;cursor:default}
+.library-action-list .step-select {min-width:0;display:flex;align-items:center;gap:9px;text-align:left;flex:1 1 200px;padding:0}
+.library-action-list .step-title {gap:5px}
+.library-action-list .step-brief {display:block;font-size:11px;color:#93a184;margin-top:7px;line-height:1.7}
+.library-action-list .step-actions {position:static;opacity:1;pointer-events:auto;margin-left:auto;box-shadow:none}
+.library-editor-footer {padding:13px 18px;border-top:1px solid var(--line);background:#fcfdf9;flex-shrink:0}
+.library-editor-footer p {font-size:10px;line-height:1.7;margin:0 0 10px;color:#9caa8f}
+.library-editor-footer>div {display:flex;justify-content:flex-end;align-items:center;gap:12px}
+.library-delete {display:flex;align-items:center;gap:5px;color:#b17b64;font-size:11px;padding:7px}
+.library-error,.library-notice,.library-collision {border-radius:5px;margin:12px 18px;padding:10px 12px;font-size:11px;line-height:1.8}
+.library-error {background:#fff2e9;border:1px solid #efd6c2;color:#ab7655}
+.library-notice {display:flex;align-items:flex-start;gap:6px;background:#f0f7e8;border:1px solid #d6e5c8;color:#769759}
+.library-notice svg {flex-shrink:0;margin-top:3px}
+.library-collision {background:#fdf8ec;border:1px solid #ece1c0;color:#a18a59}
+.library-collision p {margin:0}
+.library-collision button {padding:5px 0 0;color:#7e8151;text-decoration:underline;text-underline-offset:3px;font-size:11px}
+@media(max-width:1100px) {
+  .palette-library-manage {margin:0;grid-column:1/-1}
+  .block-template-row {margin:0}
+}
+@media(max-width:760px) {
+  .modal.block-library-dialog {width:calc(100vw - 20px);height:calc(100dvh - 24px);border-radius:9px}
+  .block-library-dialog .modal-header {padding:14px 16px 10px}
+  .block-library-dialog .modal-header h2 {font-size:15px}
+  .library-intro {padding:0 16px 11px;font-size:10px}
+  .library-workspace {grid-template-columns:minmax(0,1fr);grid-template-rows:155px minmax(0,1fr)}
+  .library-list-panel {border-right:0;border-bottom:1px solid var(--line)}
+  .library-list-toolbar {padding:5px 12px 1px}
+  .library-search {padding:5px 7px;margin-bottom:3px}
+  .library-entry-list {display:flex;gap:5px;padding:0 11px 7px}
+  .library-entry-list>button {flex:0 0 180px;padding:8px;margin:0}
+  .library-entry-list>button span {display:none}
+  .library-entry-list small {margin-top:5px}
+  .library-template-fields {padding:3px 15px 16px}
+  .library-editor-heading {padding:11px 15px;font-size:11px}
+  .library-editor-footer {padding:10px 14px}
+}

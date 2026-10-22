@@ -11,6 +11,7 @@ import { LiveRun, useLiveStatus } from './live.jsx';
 import { liveStepIndex } from './monitor.js';
 import { refreshAllStatus, refreshMessage } from './refresh.js';
 import {BlockPalette,BlockCanvas,BlockInspector} from './WorkflowBuilder.jsx';
+import BlockLibraryManager from './BlockLibraryManager.jsx';
 import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
@@ -42,6 +43,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [templates, setTemplates] = useState({});
   const [measurementTemplates, setMeasurementTemplates] = useState({});
   const [blockTemplates,setBlockTemplates]=useState([]);
+  const [libraryOpen,setLibraryOpen]=useState({seed:null,id:null});
   const [paletteMode,setPaletteMode]=useState('blocks');
   const [selectedBlock,setSelectedBlock]=useState(null);
   const actionTemplates = useMemo(() => ({ ...templates, ...measurementTemplates }), [templates, measurementTemplates]);
@@ -186,10 +188,10 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     return () => clearTimeout(timer);
   }, [notice]);
   useEffect(() => {
-    const close = event => { if (event.key === 'Escape') setModal(null); };
+    const close = event => { if (event.key === 'Escape' && modal!=='block-library') setModal(null); };
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
-  }, []);
+  }, [modal]);
   useEffect(()=>{if(inspectorBodyRef.current) inspectorBodyRef.current.scrollTop=0;},[selected,selectedBlock,rightTab]);
   function change(update) {
     setDraft(current => typeof update === 'function' ? update(current) : { ...current, ...update });
@@ -223,6 +225,13 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   function downloadBlock() {
     try {const document=exportBlock(activeBlock);importBlock(document);download(document,activeBlock.id+'.block.json');}
     catch(failure) {setError('功能块导出失败：'+failure.message);}
+  }
+  function openBlockLibrary(block=null,id=null) {
+    if(user?.role!=='admin')return;
+    try {
+      const seed=block?exportBlock(block):null;if(seed)importBlock(seed);
+      setLibraryOpen({seed,id});setModal('block-library');
+    }catch(failure){setError('请先补全功能块：'+failure.message);}
   }
   function copyBlock(key) {const source=draft.blocks.find(block=>block._key===key);const copy=instantiateBlock(source,draft.blocks);change(current=>({...current,blocks:current.blocks.flatMap(block=>block._key===key?[block,copy]:[block])}));selectBlock(copy._key);}
   function deleteBlock(key) {
@@ -345,6 +354,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
           </div>
           <div className="builder-grid">
             <BlockPalette elementRef={paletteRef} blocks={blockTemplates} templates={templates} measurementTemplates={measurementTemplates} activeBlock={activeBlock} shortNames={shortNames}
+              canManage={user?.role==='admin'} onManage={()=>openBlockLibrary()} onEditTemplate={id=>openBlockLibrary(null,id)}
               mode={paletteMode} onMode={setPaletteMode} onAddBlock={addBlock} onAddAction={addStep} onNew={newBlock}
               onImport={()=>{setImportText('');setModal('import-block');}} onTemplates={()=>setModal('templates')}/>
             <BlockCanvas blocks={draft.blocks} selected={selectedBlock} runningIndex={runningIndex} templates={actionTemplates} shortNames={shortNames}
@@ -357,6 +367,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
               </div>
               <div className="inspector-scroll" ref={inspectorBodyRef} id={rightTab+'-panel'} role="tabpanel" aria-labelledby={rightTab+'-tab'}>
                 {rightTab==='parameters' ? <BlockInspector block={activeBlock} blockIndex={blockIndex} selectedStep={selectedStep} templates={actionTemplates} names={names} shortNames={shortNames}
+                  canManage={user?.role==='admin'} onSaveTemplate={()=>openBlockLibrary(activeBlock)}
                   onBlockChange={updateBlock} onSelectAction={selectAction} onUpdateAction={values=>updateStep(selectedStep._key,values)} onMoveAction={reorder} onCopyAction={copyAction} onDeleteAction={deleteAction}
                   onAddAction={showActions} onExport={downloadBlock} onTemplates={()=>setModal('templates')}
                   cellBudget={cellBudget} offset={blockOffset} runningIndex={runningIndex}/> :
@@ -380,7 +391,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       </div>
     </main>
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
-    {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
+    {modal==='block-library' && <BlockLibraryManager user={user} seed={libraryOpen.seed} initialId={libraryOpen.id} templates={actionTemplates} names={names} shortNames={shortNames} defaultVolume={health?.ui.default_volume_ml ?? 1} onChanged={library=>setBlockTemplates(library.blocks)} onClose={()=>setModal(null)}/>}
+    {modal && modal!=='block-library' && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
       {['import','import-block'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :

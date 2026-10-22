@@ -70,7 +70,7 @@ export default function ActionInspector({ step, template, index, title, onChange
         {template.action.type === 'drain' && <p className="parameter-hint">按模板增加 {Math.round(template.action.extra_time_fraction*100)}% 排液时间；抽液前需先选择废液流路。</p>}
       </>}
       </section>
-      <section className="parameter-group template-parameter-summary"><div className="parameter-section-heading">继承的模板参数<button onClick={onOpenTemplates} type="button"><Settings2 size={13} />查看</button></div><dl><dt>操作</dt><dd>{operationLabels[step.operation]}</dd><dt>液体</dt><dd>{fluidLabels[step.fluid] || '—'}</dd><dt>默认速度</dt><dd>{config.rpm ? config.rpm+' rpm' : config.speed_steps_s ? config.speed_steps_s+' 步/秒' : '—'}</dd><dt>流量估算</dt><dd>{config.calibration?.flow_ml_min ? config.calibration.flow_ml_min+' mL/min' : '—'}</dd><dt>设备地址</dt><dd>{config.address}</dd></dl><p className="parameter-hint">速度、标定及通讯设置由对应 JSON 模板统一管理。</p></section>
+      <section className="parameter-group template-parameter-summary"><div className="parameter-section-heading">继承的模板参数{onOpenTemplates && <button onClick={onOpenTemplates} type="button"><Settings2 size={13} />查看</button>}</div><dl><dt>操作</dt><dd>{operationLabels[step.operation]}</dd><dt>液体</dt><dd>{fluidLabels[step.fluid] || '—'}</dd><dt>默认速度</dt><dd>{config.rpm ? config.rpm+' rpm' : config.speed_steps_s ? config.speed_steps_s+' 步/秒' : '—'}</dd><dt>流量估算</dt><dd>{config.calibration?.flow_ml_min ? config.calibration.flow_ml_min+' mL/min' : '—'}</dd><dt>设备地址</dt><dd>{config.address}</dd></dl><p className="parameter-hint">速度、标定及通讯设置由对应 JSON 模板统一管理。</p></section>
     </>}
   </div>;
 }

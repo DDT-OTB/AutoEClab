@@ -4,6 +4,8 @@ All data APIs and SSE subscriptions require a server-side session. There is no s
 
 Experiment rename, duplicate and delete routes also require administrator access, CSRF protection and the observed file version. Paths cannot escape the sequence directory or follow file symlinks. Existing JSON and Markdown are backed up before modification, with rollback attempted on write failure. A running controller's active experiment cannot be overwritten, renamed or deleted. Backups remain local and are excluded from Git.
 
+Function-block library creation, editing, renaming and deletion also require administrator authorization, CSRF and request protection. Updates and deletes require the observed template version. Custom templates and overrides of bundled defaults are atomically stored in private `data/function_blocks/` files with backups; they are excluded from Git. Library changes never modify existing experiment instances or immutable execution snapshots, and template validation never opens serial devices. Full experiments still enforce routing, cell capacity and startup preparation independently of reusable templates.
+
 Passwords are stored using scrypt with a random salt. Session identifiers are stored only as SHA-256 digests. Temporary credentials expire after 24 hours and require a password change before data access. Password changes and resets revoke previous sessions. Passwords must exceed eight characters and include lowercase letters and digits.
 
 State-changing requests require a CSRF token, the request-protection header and same-origin validation. The account list is restricted to administrators and contains no password hashes or session tokens. Login failures are limited per account and verified source address.

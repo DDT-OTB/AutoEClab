@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {ArrowDown,ArrowUp,Boxes,ChevronLeft,Copy,Download,GripVertical,Plus,Trash2,Upload,Workflow} from 'lucide-react';
+import {ArrowDown,ArrowUp,Boxes,ChevronLeft,Copy,Download,GripVertical,Pencil,Plus,Save,Settings2,Trash2,Upload,Workflow} from 'lucide-react';
 import FlowStep, {ActionIcon} from './FlowStep.jsx';
 import ActionInspector from './ActionInspector.jsx';
 import {fluidLabels,operationLabels} from './model.js';
@@ -7,7 +7,7 @@ import {isMeasurement,stepSummary} from './cv.js';
 
 const labels={water_rinse:'水洗',drain_waste_1:'排至废液 1',drain_waste_2:'排至废液 2',electrolyte_injection:'加入电解液'};
 
-export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,shortNames,onAddBlock,onAddAction,onImport,onNew,onTemplates,mode,onMode,elementRef}) {
+export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,shortNames,onAddBlock,onAddAction,onImport,onNew,onTemplates,mode,onMode,elementRef,canManage,onManage,onEditTemplate}) {
   return <aside className="palette block-palette" ref={elementRef}>
     <div className="panel-heading"><span>编排组件</span><span className="tiny-label">LIBRARY</span></div>
     <div className="palette-tabs" role="tablist" aria-label="编排组件类型">
@@ -16,9 +16,10 @@ export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,
     </div>
     <p className="panel-intro">{mode==='blocks'?'先添加功能块，再编辑块内动作。':'将动作加入当前选中的功能块。'}</p>
     {mode==='blocks'? <>
-      {blocks.map(block=><button className="palette-item block-template" key={block.id} onClick={()=>onAddBlock(block)}>
+      {canManage && <button className="palette-library-manage" onClick={onManage}><Settings2 size={14}/>管理功能块模板</button>}
+      {blocks.map(block=><div className={'block-template-row'+(canManage?' managed':'')} key={block.id}><button className="palette-item block-template" onClick={()=>onAddBlock(block)}>
         <span className="palette-icon"><Boxes size={17}/></span><span><strong>{labels[block.id] || block.id}</strong><small>{block.steps.length} 个动作 · 顺序执行</small></span><Plus size={15}/>
-      </button>)}
+      </button>{canManage && <button className="block-template-edit" onClick={()=>onEditTemplate(block.id)} aria-label={'编辑模板 '+block.id} title="编辑此功能块模板"><Pencil size={13}/></button>}</div>)}
       <button className="palette-item" onClick={onNew}><span className="palette-icon"><Plus size={17}/></span><span><strong>空白功能块</strong><small>自行组合动作</small></span></button>
       <button className="palette-import" onClick={onImport}><Upload size={14}/>导入功能块 JSON</button>
       <div className="palette-tip"><Workflow size={16}/><span>实验由功能块组成<br/>功能块由动作组成</span></div>
@@ -64,14 +65,14 @@ export function BlockCanvas({blocks,selected,runningIndex,templates,shortNames,o
   </div>;
 }
 
-export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,onTemplates,cellBudget,offset,runningIndex}) {
+export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,onTemplates,cellBudget,offset,runningIndex,canManage,onSaveTemplate}) {
   if(!block) return <div className="inspector-empty"><Boxes size={30}/><h3>选择一个功能块</h3><p>实验由多个功能块顺序组成。<br/>在这里编辑块内动作与参数。</p></div>;
   if(selectedStep) return <div className="block-action-detail">
     <button className="block-back" onClick={()=>onSelectAction(null)}><ChevronLeft size={14}/>返回 {block.id} 的动作列表</button>
     <ActionInspector key={selectedStep._key} step={selectedStep} template={templates[selectedStep.device]} index={offset+block.steps.findIndex(step=>step._key===selectedStep._key)} title={names[selectedStep.device] || selectedStep.device} onChange={onUpdateAction} onOpenTemplates={onTemplates}/>
   </div>;
   return <div className="block-editor">
-    <div className="block-editor-heading"><span className="eyebrow">FUNCTION BLOCK {blockIndex+1}</span><h3>功能块与内部动作</h3><button className="block-export" onClick={onExport}><Download size={13}/>导出功能块 JSON</button></div>
+    <div className="block-editor-heading"><span className="eyebrow">FUNCTION BLOCK {blockIndex+1}</span><h3>功能块与内部动作</h3>{canManage && <button className="block-save-template" onClick={onSaveTemplate}><Save size={13}/>保存到功能块库</button>}<button className="block-export" onClick={onExport}><Download size={13}/>导出功能块 JSON</button></div>
     <label className="parameter-field"><span>功能块 ID · 英文，实验内唯一</span><input value={block.id} maxLength={80} onChange={event=>onBlockChange({id:event.target.value})} aria-label="功能块 ID" spellCheck={false}/></label>
     <label className="parameter-field"><span>功能块说明 · 英文</span><input value={block.description} onChange={event=>onBlockChange({description:event.target.value})} aria-label="功能块说明"/></label>
     <div className="block-actions-heading"><strong>{block.steps.length} 个顺序动作</strong><button onClick={onAddAction}><Plus size={13}/>添加动作</button></div>

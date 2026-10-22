@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const require = createRequire(import.meta.url);
 const { buildSync } = require('esbuild');
 const compiled = buildSync({
-  stdin: { contents: "export { default as FlowStep } from './src/FlowStep.jsx'; export { default as ActionInspector } from './src/ActionInspector.jsx'; export { default as AccountManagement } from './src/AccountManagement.jsx'; export { BlockCanvas, BlockInspector } from './src/WorkflowBuilder.jsx'; export { default as App } from './src/App.jsx';",
+  stdin: { contents: "export { default as FlowStep } from './src/FlowStep.jsx'; export { default as ActionInspector } from './src/ActionInspector.jsx'; export { default as AccountManagement } from './src/AccountManagement.jsx'; export { BlockCanvas, BlockInspector, BlockPalette } from './src/WorkflowBuilder.jsx'; export { default as App } from './src/App.jsx'; export {default as BlockLibraryManager} from './src/BlockLibraryManager.jsx';",
     loader: 'jsx', resolveDir: fileURLToPath(new URL('../', import.meta.url)) },
   bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'lucide-react'],loader:{'.css':'empty'},
 }).outputFiles[0].text;
@@ -16,6 +16,7 @@ const module = { exports: {} };
 new Function('require', 'module', 'exports', compiled)(require, module, module.exports);
 const { FlowStep, ActionInspector, AccountManagement } = module.exports;
 const {BlockCanvas,BlockInspector,App}=module.exports;
+const {BlockPalette,BlockLibraryManager}=module.exports;
 const cv = JSON.parse(fs.readFileSync(new URL('../../config/action_templates/cyclic_voltammetry.json', import.meta.url)));
 const pump = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/demo-lab/config/templates/peristaltic_1.json', import.meta.url)));
 const valve = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/demo-lab/config/templates/valve.json', import.meta.url)));
@@ -81,4 +82,27 @@ test('the application renders an empty block editor without assuming top-level a
   assert.match(html,/从第一个功能块开始/);
   assert.match(html,/功能块 \/ 动作/);
   assert.doesNotMatch(html,/确认启动设备/);
+});
+
+test('only administrator views expose template save and library management controls',()=>{
+  const step={device:'peristaltic_1',operation:'inject',volume_ml:10,fluid:'water',_key:'action-1'};
+  const block={id:'custom_block',description:'Synthetic block',steps:[step],_key:'block-1'};
+  const props={block,templates:{peristaltic_1:pump},names:{},shortNames:{},cellBudget:{steps:[],capacity_ml:40},offset:0};
+  assert.match(renderToStaticMarkup(React.createElement(BlockInspector,{...props,canManage:true})),/保存到功能块库/);
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(BlockInspector,{...props,canManage:false})),/保存到功能块库/);
+  const palette={blocks:[{id:block.id,description:block.description,steps:[step]}],templates:{},measurementTemplates:{},mode:'blocks',shortNames:{}};
+  const admin=renderToStaticMarkup(React.createElement(BlockPalette,{...palette,canManage:true}));
+  assert.match(admin,/管理功能块模板/);assert.match(admin,/aria-label="编辑模板 custom_block"/);
+  const viewer=renderToStaticMarkup(React.createElement(BlockPalette,{...palette,canManage:false}));
+  assert.doesNotMatch(viewer,/管理功能块模板|编辑模板 custom_block/);
+  assert.match(renderToStaticMarkup(React.createElement(BlockLibraryManager,{user:{role:'viewer'},templates:{}})),/需要管理员权限/);
+});
+test('the template editor shows the seeded action list and action buttons cannot submit its save form',()=>{
+  const seed={schema_version:1,kind:'function_block',id:'test_block',description:'Synthetic template',steps:[{device:'peristaltic_1',operation:'inject',volume_ml:10,fluid:'water'}]};
+  const html=renderToStaticMarkup(React.createElement(BlockLibraryManager,{user:{role:'admin'},seed,templates:{peristaltic_1:pump},names:{},shortNames:{}}));
+  assert.match(html,/aria-label="模板 ID"/);assert.match(html,/value="test_block"/);assert.match(html,/保存模板/);
+  assert.match(html,/编辑第 1 步参数/);assert.doesNotMatch(html,/运行当前编排|确认启动设备/);
+  assert.match(html,/<form class="library-template-form" noValidate=""/);
+  const action=renderToStaticMarkup(React.createElement(FlowStep,{step:seed.steps[0],template:pump,index:0,total:1}));
+  assert.ok([...action.matchAll(/<button\b[^>]*>/g)].every(([tag])=>tag.includes('type="button"')));
 });

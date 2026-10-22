@@ -4,6 +4,7 @@ import AuthGate from './AuthGate.jsx';
 import './styles.css';
 import './editor.css';
 import './workflow.css';
+import './block-library.css';
 import './equipment.css';
 import './apparatus.css';
 import './accounts.css';

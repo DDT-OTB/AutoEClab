@@ -69,6 +69,8 @@ class LabRepository:
         if type(execution_enabled) is not bool:
             raise ValueError('Invalid execution enable flag')
         self.execution = ExecutionManager(self, execution_enabled, automation)
+        from .block_library import BlockLibrary
+        self.block_library = BlockLibrary(self)
 
     def templates(self):
         _, templates = self.compiler.load_templates(self.templates_dir)
@@ -76,7 +78,8 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.10.0",
+            "ok": True, "service": "pump-console", "version": "0.11.0",
+            "function_block_library_administrator_required": True,
             "workflow_schema_versions": [2, 3],
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
             "automation_administrator_required": True,
