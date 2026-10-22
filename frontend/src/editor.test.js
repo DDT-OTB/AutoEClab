@@ -8,13 +8,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const require = createRequire(import.meta.url);
 const { buildSync } = require('esbuild');
 const compiled = buildSync({
-  stdin: { contents: "export { default as FlowStep } from './src/FlowStep.jsx'; export { default as ActionInspector } from './src/ActionInspector.jsx'; export { default as AccountManagement } from './src/AccountManagement.jsx';",
+  stdin: { contents: "export { default as FlowStep } from './src/FlowStep.jsx'; export { default as ActionInspector } from './src/ActionInspector.jsx'; export { default as AccountManagement } from './src/AccountManagement.jsx'; export { BlockCanvas, BlockInspector } from './src/WorkflowBuilder.jsx'; export { default as App } from './src/App.jsx';",
     loader: 'jsx', resolveDir: fileURLToPath(new URL('../', import.meta.url)) },
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'lucide-react'],
+  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'lucide-react'],loader:{'.css':'empty'},
 }).outputFiles[0].text;
 const module = { exports: {} };
 new Function('require', 'module', 'exports', compiled)(require, module, module.exports);
 const { FlowStep, ActionInspector, AccountManagement } = module.exports;
+const {BlockCanvas,BlockInspector,App}=module.exports;
 const cv = JSON.parse(fs.readFileSync(new URL('../../config/action_templates/cyclic_voltammetry.json', import.meta.url)));
 const pump = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/demo-lab/config/templates/peristaltic_1.json', import.meta.url)));
 const valve = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/demo-lab/config/templates/valve.json', import.meta.url)));
@@ -57,4 +58,27 @@ test('account provisioning form is reserved for administrators and requires a te
   assert.match(admin,/不开放自行注册/);
   assert.match(admin,/首次登录必须修改临时密码/);
   assert.equal([...admin.matchAll(/type="password"/g)].length,2);
+});
+
+test('the workflow canvas selects blocks while the inspector owns block and action parameter inputs',()=>{
+  const step={device:'peristaltic_1',operation:'inject',volume_ml:10,fluid:'water',_key:'action-1'};
+  const block={id:'rinse',description:'Water rinse',steps:[step],_key:'block-1'};
+  const common={block,blockIndex:0,templates:{peristaltic_1:pump},names:{},shortNames:{},cellBudget:{steps:[],capacity_ml:40},offset:0,runningIndex:-1};
+  const html=renderToStaticMarkup(React.createElement(BlockCanvas,{blocks:[block],templates:common.templates,shortNames:{},selected:block._key,runningIndex:0}));
+  assert.doesNotMatch(html,/<(input|select|textarea)\b/);
+  assert.match(html,/1 个动作/);
+  assert.match(html,/动作 1 执行中/);
+  const inspector=renderToStaticMarkup(React.createElement(BlockInspector,common));
+  assert.match(inspector,/aria-label="功能块 ID"/);
+  assert.match(inspector,/导出功能块 JSON/);
+  assert.doesNotMatch(inspector,/aria-label="注入体积"/);
+  const detail=renderToStaticMarkup(React.createElement(BlockInspector,{...common,selectedStep:step}));
+  assert.match(detail,/返回 rinse 的动作列表/);
+  assert.match(detail,/aria-label="注入体积"/);
+});
+test('the application renders an empty block editor without assuming top-level actions exist',()=>{
+  const html=renderToStaticMarkup(React.createElement(App,{user:{username:'synthetic_viewer',role:'viewer'}}));
+  assert.match(html,/从第一个功能块开始/);
+  assert.match(html,/功能块 \/ 动作/);
+  assert.doesNotMatch(html,/确认启动设备/);
 });

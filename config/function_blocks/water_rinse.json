@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "kind": "function_block",
+  "id": "water_rinse",
+  "description": "Inject water and drain to waste 1",
+  "steps": [
+    {"device": "peristaltic_1", "operation": "inject", "fluid": "water", "volume_ml": 10},
+    {"device": "valve", "operation": "switch_route", "route": "waste_1"},
+    {"device": "peristaltic_2", "operation": "withdraw", "fluid": "waste_liquid", "volume_ml": 12}
+  ]
+}

@@ -12,7 +12,7 @@ export default function FlowStep({ step, index, template, title, selected, runni
   const measurement = isMeasurement(step);
   return <article className={'step-card fluid-' + (measurement ? 'measurement' : step.fluid || 'valve') +
       (selected ? ' selected' : '') + (running ? ' step-running' : '')}>
-    <button className="drag-handle" draggable onDragStart={onDragStart} onDragEnd={onDragEnd} aria-label={'拖动第 ' + (index+1) + ' 步'}><GripVertical size={17} /></button>
+    {onDragStart && <button className="drag-handle" draggable onDragStart={onDragStart} onDragEnd={onDragEnd} aria-label={'拖动第 ' + (index+1) + ' 步'}><GripVertical size={17} /></button>}
     <button className="step-select" onClick={onSelect} aria-pressed={selected} aria-label={'编辑第 ' + (index+1) + ' 步参数'}>
       <span className="step-icon"><ActionIcon kind={template?.device.kind} size={18} /></span>
       <span className="step-content"><span className="step-title"><strong>{title}</strong><span className="step-operation">{operationLabels[step.operation] || step.operation}</span>

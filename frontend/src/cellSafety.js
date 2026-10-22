@@ -1,4 +1,5 @@
 import policy from '../../config/safety_policy.json' with {type:'json'};
+import { flattenSequence } from './workflow.js';
 export const defaultSafetyPolicy=policy;
 export const cellPreparationLabels={required:'未排空准备',running:'排空中',awaiting_confirmation:'待现场确认',passed:'已确认空池',failed:'排空失败',invalidated:'需要重新排空',consumed:'本次已使用',not_required:'无需准备',unknown:'状态待确认'};
 export function cellAllowsStart(state) {return state?.required===false || state?.state==='passed';}
@@ -6,7 +7,7 @@ export function cellVolumes(sequence,safetyPolicy=policy,templates={}) {
   const capacity=safetyPolicy.cell.capacity_ml;
   let current=0,peak=0;
   const errors=[];
-  const steps=sequence.steps.map((step,index)=>{
+  const steps=flattenSequence(sequence).steps.map((step,index)=>{
     const before=current;
     if(['inject','withdraw'].includes(step.operation) && Number.isFinite(step.volume_ml) && step.volume_ml>0) {
       let amount=step.volume_ml;

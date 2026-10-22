@@ -11,6 +11,7 @@ from .execution import RUN_ID, initialization_plan, version, write_private
 from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
+from .workflow import flatten_sequence
 
 
 def execute(lab_root, run_directory, run_id, runner_factory=None):
@@ -21,7 +22,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     job = parse_json((folder / 'job.json').read_bytes())
     if version(snapshot) != job['version']:
         raise ValueError('Prepared snapshot version changed')
-    if any(is_measurement(step) for step in snapshot['sequence']['steps']):
+    if any(is_measurement(step) for step in flatten_sequence(snapshot['sequence'])['steps']):
         raise ValueError('Workstation execution is not integrated')
     root = Path(lab_root).resolve()
     sys.path.insert(0, str(root / 'src'))

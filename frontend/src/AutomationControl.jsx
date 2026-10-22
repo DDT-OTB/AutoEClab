@@ -5,6 +5,7 @@ import {automationAvailability,calibrationAllowsStart,calibrationLabels,executio
 import {fluidLabels,formatDuration,operationLabels} from './model.js';
 import CellPreparation from './CellPreparation.jsx';
 import {cellAllowsStart,cellPreparationLabels,cellVolumes} from './cellSafety.js';
+import {flattenSequence} from './workflow.js';
 
 export function ExecutionConfirmation({prepared,currentSequence,pending,error,onStart,onClose,names,blockedReason,calibration,onCalibrate,calibrationBusy,onStop,canStop,cellPreparation,onDrain,onEmptyConfirm,cellBusy,canStopDrain,fresh=true}) {
   const [confirmDischarge,setConfirmDischarge]=useState(false);
@@ -107,7 +108,7 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
     </div></div>
     <p className="automation-control-note">{availability.reason}</p>
     <div className="calibration-overview" aria-label="电解池容量与启动前准备"><span>容量上限 {volumes.capacity_ml} mL</span><small>本方案预计峰值 {volumes.peak_volume_ml} mL · {currentCellReady?'运行中任务空池准备':'启动前排空'}：{cellPreparationLabels[visibleCellPreparation]} · 需人工确认空池</small></div>
-    {sequence.steps.some(step=>step.device==='syringe_c') && <div className="calibration-overview" aria-label="注射泵实验前校验状态"><span className={visibleCalibration==='passed'?'is-passed':''}>本次回零：{calibrationLabels[visibleCalibration]}</span><small>每次实验前必需；点击“运行当前编排”完成校验。{status.execution?.syringe_calibration?.last_homing?.initialized_at && ' 最近回零：'+new Date(status.execution.syringe_calibration.last_homing.initialized_at).toLocaleString('zh-CN')}</small></div>}
+    {flattenSequence(sequence).steps.some(step=>step.device==='syringe_c') && <div className="calibration-overview" aria-label="注射泵实验前校验状态"><span className={visibleCalibration==='passed'?'is-passed':''}>本次回零：{calibrationLabels[visibleCalibration]}</span><small>每次实验前必需；点击“运行当前编排”完成校验。{status.execution?.syringe_calibration?.last_homing?.initialized_at && ' 最近回零：'+new Date(status.execution.syringe_calibration.last_homing.initialized_at).toLocaleString('zh-CN')}</small></div>}
     {current?.message && !active && fresh && <p className={'automation-result '+(current.state==='failed'?'is-failed':'')} role="status">{current.state==='failed'?<AlertCircle size={14}/>:<CheckCircle2 size={14}/>}<span>{current.message}</span></p>}
     {current?.cleanup_failed && <p className="automation-error" role="alert">设备停止回读失败，请现场确认。界面不会将其显示为已安全停止。</p>}
     {notice && <p className="automation-notice" role="status">{notice}</p>}{error && !prepared && <p className="automation-error" role="alert">{error}</p>}

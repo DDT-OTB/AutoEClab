@@ -40,6 +40,7 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     }),
     health: () => request('/api/health'),
     templates: () => request('/api/templates'),
+    functionBlocks: () => request('/api/function-blocks'),
     status: () => request('/api/status'),
     refreshStatus: () => request('/api/status/refresh', { method: 'POST', body: '{}', signal: AbortSignal.timeout(15000) }),
     experiments: () => request('/api/experiments'),

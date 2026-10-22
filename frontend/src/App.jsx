@@ -1,18 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, Check, CheckCheck,
-  ChevronDown, ChevronRight, CircleHelp, Clipboard, Code2, Copy, Download,
-  Droplet, FileJson, FlaskConical, FolderOpen, GripVertical, History,
-  LayoutDashboard, Link2, LockKeyhole, Plus, RefreshCw, Save, Settings2,
-  ShieldCheck, SlidersHorizontal, Trash2, Unplug, Users, Workflow, X,
+  ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, CircleHelp, Clipboard,
+  Code2, Download, FileJson, FlaskConical, FolderOpen, History, LayoutDashboard,
+  Link2, LockKeyhole, Plus, RefreshCw, Save, Settings2, ShieldCheck,
+  Unplug, Users, Workflow, X,
 } from 'lucide-react';
 import { appApi as api } from './api.js';
-import { draftErrors, fluidLabels, formatDuration, makeStep, moveStep, operationLabels, toEditor, toSequence, uiKey } from './model.js';
+import { draftErrors, formatDuration, makeStep, moveStep, toSequence, uiKey } from './model.js';
 import { LiveRun, useLiveStatus } from './live.jsx';
 import { liveStepIndex } from './monitor.js';
 import { refreshAllStatus, refreshMessage } from './refresh.js';
-import ActionInspector from './ActionInspector.jsx';
-import FlowStep, { ActionIcon } from './FlowStep.jsx';
+import {BlockPalette,BlockCanvas,BlockInspector} from './WorkflowBuilder.jsx';
+import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
@@ -23,8 +22,8 @@ import { cellVolumes } from './cellSafety.js';
 import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
 const emptyDraft = () => ({
-  schema_version: 2, id: 'new_experiment', description: 'New pump experiment',
-  notes: ['Review this experiment before hardware execution.'], steps: [],
+  schema_version: 3, id: 'new_experiment', description: 'New block experiment',
+  notes: ['Review this experiment before hardware execution.'], blocks: [],
 });
 const names = {
   peristaltic_1: '泵 1 · 超纯水', peristaltic_2: '泵 2 · 排液', peristaltic_3: '泵 3 · 硫酸',
@@ -39,13 +38,12 @@ const timeText = value => value ? new Date(value).toLocaleString('zh-CN', {
   month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
 }) : '暂无记录';
 
-function DeviceIcon({ kind, size = 20 }) {
-  return <ActionIcon kind={kind} size={size} />;
-}
-
 export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [templates, setTemplates] = useState({});
   const [measurementTemplates, setMeasurementTemplates] = useState({});
+  const [blockTemplates,setBlockTemplates]=useState([]);
+  const [paletteMode,setPaletteMode]=useState('blocks');
+  const [selectedBlock,setSelectedBlock]=useState(null);
   const actionTemplates = useMemo(() => ({ ...templates, ...measurementTemplates }), [templates, measurementTemplates]);
   const { status, accept: acceptStatus, streaming, fresh } = useLiveStatus(api);
   const [health, setHealth] = useState(null);
@@ -68,31 +66,36 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [rightTab, setRightTab] = useState('parameters');
   const [modal, setModal] = useState(null);
   const [importText, setImportText] = useState('');
-  const [dragIndex, setDragIndex] = useState(null);
   const [activeNav, setActiveNav] = useState('editor');
   const previousNav = useRef('editor');
   const historyRef = useRef(null);
   const editorRef = useRef(null);
   const inspectorRef = useRef(null);
+  const paletteRef=useRef(null);
+  const inspectorBodyRef=useRef(null);
   const editorSnapshot = useRef({draft,base,dirty});
   editorSnapshot.current={draft,base,dirty};
   const sequence = useMemo(() => toSequence(draft), [draft]);
+  const flatSequence=useMemo(()=>flattenSequence(sequence),[sequence]);
+  const steps=useMemo(()=>draft.blocks.flatMap(block=>block.steps),[draft.blocks]);
   const cellBudget=useMemo(()=>cellVolumes(sequence,undefined,actionTemplates),[sequence,actionTemplates]);
   const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
   const jsonText = useMemo(() => JSON.stringify(sequence, null, 2), [sequence]);
   const latestJson = useRef(jsonText);
   latestJson.current = jsonText;
-  const selectedStep = draft.steps.find(step => step._key === selected);
-  const selectedTemplate = selectedStep ? actionTemplates[selectedStep.device] : null;
-  const measurementCount = draft.steps.filter(isMeasurement).length;
-  const runningIndex = liveStepIndex(draft, status.runtime, dirty && submittedSequence!==sequenceKey(sequence), fresh);
+  const activeBlock=draft.blocks.find(block=>block._key===selectedBlock);
+  const selectedStep = activeBlock?.steps.find(step => step._key === selected);
+  const blockIndex=draft.blocks.findIndex(block=>block._key===selectedBlock);
+  const blockOffset=draft.blocks.slice(0,Math.max(0,blockIndex)).reduce((sum,block)=>sum+block.steps.length,0);
+  const measurementCount = steps.filter(isMeasurement).length;
+  const runningIndex = liveStepIndex(flatSequence, status.runtime, dirty && submittedSequence!==sequenceKey(sequence), fresh);
   const totals = useMemo(() => {
     const result = { inject: 0, withdraw: 0 };
-    draft.steps.forEach(step => {
+    steps.forEach(step => {
       if (typeof step.volume_ml === 'number' && step.operation in result) result[step.operation] += step.volume_ml;
     });
     return result;
-  }, [draft.steps]);
+  }, [steps]);
 
   async function refresh() {
     const started = performance.now();
@@ -127,9 +130,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     setBusy('load'); setError('');
     try {
       const data = await api.experiment(id);
-      const value = toEditor(data.sequence);
+      const value = workflowToEditor(data.sequence);
       setDraft(value); setBase({ id, version: data.version }); setDirty(false);
-      setSelected(value.steps[0]?._key || null); setPlan(null);
+      setSelectedBlock(value.blocks[0]?._key || null);setSelected(null); setPlan(null);
       setRightTab('parameters');
       return true;
     } catch (failure) { setError(failure.message); return false; }
@@ -155,7 +158,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   useEffect(() => {
     (async () => {
       try {
-        const [items, list] = await Promise.all([api.templates(), reloadCatalog()]);
+        const [items, list,library] = await Promise.all([api.templates(), reloadCatalog(),api.functionBlocks()]);
+        setBlockTemplates(library.blocks);
         setTemplates(items.templates); setMeasurementTemplates(items.measurement_templates || {});
         const editable=list.filter(item=>item.editable!==false);
         const id = editable.some(item => item.id === 'demo_rinse_with_predrain')
@@ -186,36 +190,68 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, []);
+  useEffect(()=>{if(inspectorBodyRef.current) inspectorBodyRef.current.scrollTop=0;},[selected,selectedBlock,rightTab]);
   function change(update) {
     setDraft(current => typeof update === 'function' ? update(current) : { ...current, ...update });
     setDirty(true); setPlan(null); setError('');
   }
   function addStep(id) {
+    if(!activeBlock) {setError('请先添加并选择一个功能块。');return;}
     const step = makeStep(actionTemplates[id], health?.ui.default_volume_ml ?? 1);
-    change(current => ({ ...current, steps: [...current.steps, step] }));
+    updateBlock({steps:[...activeBlock.steps,step]});
     selectAction(step._key);
   }
+  function updateBlock(values) {
+    change(current=>({...current,blocks:current.blocks.map(block=>block._key===selectedBlock?{...block,...values}:block)}));
+  }
+  function addBlock(template) {
+    const source=template.kind?importBlock(template):template;
+    const block=instantiateBlock(source,draft.blocks);
+    change(current=>({...current,blocks:[...current.blocks,block]}));
+    setSelectedBlock(block._key);setSelected(null);setRightTab('parameters');
+  }
+  function newBlock() {addBlock({id:'new_block',description:'New function block',steps:[]});setPaletteMode('actions');}
+  function selectBlock(key) {
+    setSelectedBlock(key);setSelected(null);setRightTab('parameters');
+    if(window.matchMedia('(max-width: 760px)').matches) inspectorRef.current?.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  function showActions() {
+    setPaletteMode('actions');
+    if(paletteRef.current) paletteRef.current.scrollTop=0;
+    if(window.matchMedia('(max-width: 1100px)').matches) paletteRef.current?.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  function downloadBlock() {
+    try {const document=exportBlock(activeBlock);importBlock(document);download(document,activeBlock.id+'.block.json');}
+    catch(failure) {setError('功能块导出失败：'+failure.message);}
+  }
+  function copyBlock(key) {const source=draft.blocks.find(block=>block._key===key);const copy=instantiateBlock(source,draft.blocks);change(current=>({...current,blocks:current.blocks.flatMap(block=>block._key===key?[block,copy]:[block])}));selectBlock(copy._key);}
+  function deleteBlock(key) {
+    const index=draft.blocks.findIndex(block=>block._key===key),remaining=draft.blocks.filter(block=>block._key!==key);
+    if(!window.confirm('删除此功能块及其内部的所有动作？')) return;
+    change({blocks:remaining});
+    if(selectedBlock===key) {setSelectedBlock(remaining[Math.min(index,remaining.length-1)]?._key || null);setSelected(null);}
+  }
+  function reorderBlocks(from,to) {change(current=>({...current,blocks:moveStep(current.blocks,from,to)}));}
   function selectAction(key) {
     setSelected(key); setRightTab('parameters');
-    if (window.matchMedia('(max-width: 980px)').matches) inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   function copyAction(key) {
-    const original = draft.steps.find(step => step._key === key);
+    const original = activeBlock.steps.find(step => step._key === key);
     const copy = { ...structuredClone(original), _key: uiKey() };
     if (copy.id) copy.id = 'copy_' + copy._key.replaceAll('-', '_');
-    change(current => ({ ...current, steps: current.steps.flatMap(step => step._key === key ? [step, copy] : [step]) }));
+    updateBlock({steps:activeBlock.steps.flatMap(step => step._key === key ? [step, copy] : [step])});
     selectAction(copy._key);
   }
   function deleteAction(key) {
-    const index = draft.steps.findIndex(step => step._key === key);
-    const remaining = draft.steps.filter(step => step._key !== key);
-    change(current => ({ ...current, steps: remaining }));
+    const index = activeBlock.steps.findIndex(step => step._key === key);
+    const remaining = activeBlock.steps.filter(step => step._key !== key);
+    updateBlock({steps:remaining});
     if (selected === key) setSelected(remaining[Math.min(index, remaining.length-1)]?._key || null);
   }
   function updateStep(key, values) {
-    change(current => ({ ...current, steps: current.steps.map(step => step._key === key ? { ...step, ...values } : step) }));
+    updateBlock({steps:activeBlock.steps.map(step => step._key === key ? { ...step, ...values } : step)});
   }
-  function reorder(from, to) { change(current => ({ ...current, steps: moveStep(current.steps, from, to) })); }
+  function reorder(from, to) {updateBlock({steps:moveStep(activeBlock.steps,from,to)});}
   async function preview() {
     if (errors.length) { setError(errors[0]); return; }
     setBusy('preview'); setError('');
@@ -240,16 +276,16 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     } catch (failure) { setError(failure.message); }
     finally { setBusy(''); }
   }
-  function download() {
-    const url = URL.createObjectURL(new Blob([jsonText + '\n'], { type: 'application/json' }));
+  function download(value=sequence,filename=(draft.id || 'experiment')+'.json') {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(value,null,2) + '\n'], { type: 'application/json' }));
     const link = document.createElement('a');
-    link.href = url; link.download = (draft.id || 'experiment') + '.json'; link.click();
+    link.href = url; link.download = filename; link.click();
     URL.revokeObjectURL(url);
   }
   function createNew() {
     if (dirty && !window.confirm('新建方案会放弃尚未保存的修改，是否继续？')) return false;
     setDraft({...emptyDraft(),id:uniqueExperimentId('new_experiment',catalog)}); setBase({ id: null, version: null }); setDirty(true);
-    setPlan(null); setSelected(null); setError('');
+    setPlan(null); setSelected(null);setSelectedBlock(null); setError('');
     setRightTab('parameters');setActiveNav('editor');setModal(null);return true;
   }
   async function importFile(event) {
@@ -262,12 +298,13 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   }
   function importSequence() {
     try {
+      if(new TextEncoder().encode(importText).length>262144) throw new Error('导入文件不能超过 256 KB。');
       const value = JSON.parse(importText);
-      if (value.schema_version !== 2 || !Array.isArray(value.steps)) throw new Error('需要 schema_version=2 的实验序列。');
+      if(modal==='import-block') {addBlock(importBlock(value));setModal(null);setError('');setNotice('已导入功能块；参数仍需校验与保存。');return;}
       if(dirty && !window.confirm('导入方案会替换尚未保存的编排内容，是否继续？')) return;
-      const editor = toEditor(value);
+      const editor = workflowToEditor(value);
       setDraft(editor); setBase({ id: null, version: null }); setDirty(true);
-      setPlan(null); setSelected(editor.steps[0]?._key); setModal(null); setError('');
+      setPlan(null);setSelectedBlock(editor.blocks[0]?._key || null); setSelected(null); setModal(null); setError('');
       setRightTab('parameters');setActiveNav('editor');
     } catch (failure) { setError('导入失败：' + failure.message); }
   }
@@ -300,46 +337,31 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
         <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
 
         <section className="experiment-section" ref={editorRef}>
-          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.steps.length} 步</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setActiveNav('experiments')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
+          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.blocks.length} 块 · {steps.length} 动作</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setActiveNav('experiments')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
           <div className="experiment-form">
             <label className="scheme-select"><span>加载已有方案</span><div className="select-wrap"><select value={base.id || ''} onChange={event => loadExperiment(event.target.value)} aria-label="加载已有方案"><option value="" disabled>选择实验方案</option>{catalog.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select><ChevronDown size={15} /></div></label>
             <label><span>方案 ID <em>英文文件名</em></span><input value={draft.id} onChange={event => change({ id: event.target.value })} aria-label="方案 ID" spellCheck={false} /></label>
             <label className="description-field"><span>方案描述 <em>保存为英文 JSON</em></span><input value={draft.description} onChange={event => change({ description: event.target.value })} aria-label="方案描述" /></label>
           </div>
           <div className="builder-grid">
-            <aside className="palette"><div className="panel-heading"><span>添加操作</span><span className="tiny-label">DEVICES</span></div><p className="panel-intro">选择动作，在右侧编辑参数。<br />其余设置继承对应模板。</p>
-              {Object.entries(templates).map(([id, template]) => <button className={'palette-item fluid-' + (template.action.fluid || 'valve')} key={id} onClick={() => addStep(id)}><span className="palette-icon"><DeviceIcon kind={template.device.kind} size={17} /></span><span><strong>{shortNames[id] || id}</strong><small>{operationLabels[template.action.operation]} · {fluidLabels[template.action.fluid] || '废液流路'}</small></span><Plus size={16} /></button>)}
-              <div className="measurement-palette-heading">仪器测量 <span>参数草稿</span></div>
-              {Object.entries(measurementTemplates).map(([id, template]) => <button className="palette-item fluid-measurement" key={id} onClick={() => addStep(id)}><span className="palette-icon"><ActionIcon kind="electrochemical" size={17} /></span><span><strong>循环伏安法</strong><small>CV · 工作站待接入</small></span><Plus size={16} /></button>)}
-              <div className="palette-tip"><GripVertical size={17} /><span>拖动步骤可调整顺序<br />也可使用上下移动按钮</span></div><div className="template-link"><Settings2 size={14} /><button onClick={() => setModal('templates')}>查看设备默认参数</button></div>
-            </aside>
-            <div className="flow-canvas"><div className="canvas-caption"><span><Workflow size={15} />顺序执行</span><span>点击节点，在右侧编辑参数</span></div>
-              {!draft.steps.length && <div className="empty-canvas"><span><Workflow size={30} /></span><h3>从第一个操作开始</h3><p>点击左侧设备，将操作加入实验流程。</p></div>}
-              <div className="flow-start"><span />实验开始</div>
-              {draft.steps.map((step, index) => <div className="step-wrap" key={step._key}
-                onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (dragIndex !== null) reorder(dragIndex,index); setDragIndex(null); }}>
-                <div className="timeline-number">{String(index+1).padStart(2,'0')}</div>
-                <FlowStep step={step} index={index} template={actionTemplates[step.device]} title={shortNames[step.device] || step.device}
-                  cellVolume={cellBudget.steps[index]} cellCapacity={cellBudget.capacity_ml}
-                  selected={selected===step._key} running={runningIndex===index} total={draft.steps.length}
-                  onSelect={() => selectAction(step._key)} onMove={reorder} onCopy={() => copyAction(step._key)} onDelete={() => deleteAction(step._key)}
-                  onDragStart={event => { event.dataTransfer.setData('text/plain',String(index)); setDragIndex(index); }}
-                  onDragEnd={() => setDragIndex(null)} />
-              </div>)}
-              <button className="append-step" onClick={() => addStep(Object.keys(templates)[0])} disabled={!Object.keys(templates).length}><Plus size={16} />添加一个操作</button><div className="flow-end"><CheckCheck size={13} />实验结束</div>
-            </div>
+            <BlockPalette elementRef={paletteRef} blocks={blockTemplates} templates={templates} measurementTemplates={measurementTemplates} activeBlock={activeBlock} shortNames={shortNames}
+              mode={paletteMode} onMode={setPaletteMode} onAddBlock={addBlock} onAddAction={addStep} onNew={newBlock}
+              onImport={()=>{setImportText('');setModal('import-block');}} onTemplates={()=>setModal('templates')}/>
+            <BlockCanvas blocks={draft.blocks} selected={selectedBlock} runningIndex={runningIndex} templates={actionTemplates} shortNames={shortNames}
+              onSelect={selectBlock} onMove={reorderBlocks} onCopy={copyBlock} onDelete={deleteBlock} onNew={newBlock}/>
             <aside className="inspector" ref={inspectorRef}>
               <div className="inspector-tabs" role="tablist" aria-label="流程编辑侧栏">
-                <button id="parameters-tab" role="tab" aria-controls="parameters-panel" aria-selected={rightTab==='parameters'} className={rightTab==='parameters' ? 'active' : ''} onClick={() => setRightTab('parameters')}>动作参数</button>
+                <button id="parameters-tab" role="tab" aria-controls="parameters-panel" aria-selected={rightTab==='parameters'} className={rightTab==='parameters' ? 'active' : ''} onClick={() => setRightTab('parameters')}>功能块 / 动作</button>
                 <button id="summary-tab" role="tab" aria-controls="summary-panel" aria-selected={rightTab==='summary'} className={rightTab==='summary' ? 'active' : ''} onClick={() => setRightTab('summary')}>流程摘要</button>
                 <button id="json-tab" role="tab" aria-controls="json-panel" aria-selected={rightTab==='json'} className={rightTab==='json' ? 'active' : ''} onClick={() => setRightTab('json')}><Code2 size={13} />JSON</button>
               </div>
-              <div className="inspector-scroll" id={rightTab+'-panel'} role="tabpanel" aria-labelledby={rightTab+'-tab'}>
-                {rightTab==='parameters' ? <ActionInspector key={selectedStep?._key || 'empty'} step={selectedStep} template={selectedTemplate}
-                  index={draft.steps.findIndex(step => step._key===selected)} title={names[selectedStep?.device] || selectedStep?.device}
-                  onChange={values => updateStep(selectedStep._key,values)} onOpenTemplates={() => setModal('templates')} /> :
-                 rightTab==='json' ? <div className="json-panel"><div className="json-caption"><span>schema_version: 2</span><button onClick={async () => { try { await navigator.clipboard.writeText(jsonText); setNotice('JSON 已复制。'); } catch { setError('复制失败，请使用下载 JSON。'); } }} aria-label="复制 JSON"><Clipboard size={14} /></button></div><pre>{jsonText}</pre></div> : <div className="workflow-summary">
-                  <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前实验方案</h3><p>{draft.steps.length} 个顺序步骤{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
+              <div className="inspector-scroll" ref={inspectorBodyRef} id={rightTab+'-panel'} role="tabpanel" aria-labelledby={rightTab+'-tab'}>
+                {rightTab==='parameters' ? <BlockInspector block={activeBlock} blockIndex={blockIndex} selectedStep={selectedStep} templates={actionTemplates} names={names} shortNames={shortNames}
+                  onBlockChange={updateBlock} onSelectAction={selectAction} onUpdateAction={values=>updateStep(selectedStep._key,values)} onMoveAction={reorder} onCopyAction={copyAction} onDeleteAction={deleteAction}
+                  onAddAction={showActions} onExport={downloadBlock} onTemplates={()=>setModal('templates')}
+                  cellBudget={cellBudget} offset={blockOffset} runningIndex={runningIndex}/> :
+                 rightTab==='json' ? <div className="json-panel"><div className="json-caption"><span>schema_version: 3</span><button onClick={async () => { try { await navigator.clipboard.writeText(jsonText); setNotice('JSON 已复制。'); } catch { setError('复制失败，请使用下载 JSON。'); } }} aria-label="复制 JSON"><Clipboard size={14} /></button></div><pre>{jsonText}</pre></div> : <div className="workflow-summary">
+                  <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前实验方案</h3><p>{draft.blocks.length} 个功能块 · {steps.length} 个动作{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
                   <div className="summary-metrics"><div><span>目标注入</span><strong>{totals.inject.toLocaleString()}<small>mL</small></strong></div><div><span>标称抽出</span><strong>{totals.withdraw.toLocaleString()}<small>mL</small></strong></div></div>
                   <div className="estimate-row"><History size={17} /><div><span>计时动作合计</span><strong>{formatDuration(plan?.estimated_timed_seconds)}</strong></div></div><p className="estimate-note">含已设置测量的理论时长；不含切阀、通讯与额外等待。</p>
                   <div className={'validation-state '+(errors.length ? 'needs-review' : 'is-ready')}><span>{errors.length ? <CircleHelp size={17} /> : <Check size={17} />}</span><div><strong>{errors.length ? '还需检查' : plan ? '后端参数预演通过' : '本地参数检查通过'}</strong><p>{errors[0] || (plan ? '配置已校验，未执行设备动作。' : '点击“校验与预演”检查后端模板。')}</p></div></div>
@@ -350,7 +372,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
               <div className="inspector-footer"><LockKeyhole size={13} /><span>{health?.hardware_execution_enabled?'运行使用已确认快照；编辑不会改变当前任务':'当前为配置编排，设备动作未启用'}</span></div>
             </aside>
           </div>
-          <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="subtle-button" onClick={download}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !draft.steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !draft.steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
+          <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="subtle-button" onClick={()=>download()}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
         </section>
         <section className="history-section" ref={historyRef}><div className="section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>最近运行记录</h2></div><span className="history-note">读取原有实验日志 · 不会启动设备</span></div><div className="history-table"><div className="history-row history-table-head"><span>实验方案</span><span>开始时间</span><span>完成步骤</span><span>结果</span></div>{runs.slice(0, 5).map(run => <button className="history-row" key={run.id} onClick={() => setModal({ run })}><span><FileJson size={16} />{run.sequence_id}</span><span>{timeText(run.started_at)}</span><span>{run.completed_steps} 步</span><span className={'run-tag ' + run.state}>{run.state === 'completed' ? '已完成' : run.state === 'aborted' ? '已中止' : '待确认'}<ChevronRight size={13} /></span></button>)}{!runs.length && <div className="empty-history">暂无可读取的历史运行记录</div>}</div></section>
         </>}
@@ -358,8 +380,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       </div>
     </main>
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
-    {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
-      {modal === 'import' ? <><p className="modal-description">选择本机 JSON 文件，或粘贴英文配置，载入后可继续编排。</p><label className="file-import-input"><FileJson size={16}/><span>选择方案文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label="选择实验方案 JSON 文件"/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder='{"schema_version":2,"id":"my_experiment","description":"...","steps":[]}' aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>载入编辑器<ArrowUpRight size={15} /></button></> :
+    {modal && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
+      {['import','import-block'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :
         modal === 'templates' ? <div className="template-grid">{Object.entries(actionTemplates).map(([id, template]) => <article key={id}><h3>{names[id] || id}</h3><small>{id==='electrochemical_station' ? 'action_templates/cyclic_voltammetry.json' : id+'.json'}</small><pre>{JSON.stringify(template, null, 2)}</pre></article>)}</div> :

@@ -15,6 +15,7 @@ from .runtime import RuntimeMonitor, timestamp
 from .status_refresh import RefreshBusy, StatusRefresh
 from .measurement import compile_workflow, is_measurement, measurement_templates
 from .cell_safety import CellSafetyError, load_policy, require_safe_volumes
+from .workflow import flatten_sequence, block_ranges
 
 
 class ApiError(Exception):
@@ -75,7 +76,8 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.9.0",
+            "ok": True, "service": "pump-console", "version": "0.10.0",
+            "workflow_schema_versions": [2, 3],
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
             "automation_administrator_required": True,
             "syringe_calibration_required_before_each_experiment": True,
@@ -92,11 +94,10 @@ class LabRepository:
         if not isinstance(sequence, dict):
             raise ApiError(400, "sequence 必须是 JSON 对象。")
         identifier(sequence.get("id"))
-        if type(sequence.get("schema_version")) is not int or sequence.get("schema_version") != 2:
-            raise ApiError(422, "图形化编辑器使用 schema_version=2。")
         if re.search(r"[\u3400-\u9fff]", json.dumps(sequence, ensure_ascii=False)):
             raise ApiError(422, "配置 JSON 请使用英文；界面和说明文档可以使用中文。", "english_json_required")
         try:
+            flattened = flatten_sequence(sequence)
             devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
             plan = compile_workflow(sequence, devices, templates, self.compiler, self.config)
         except (ValueError, KeyError, TypeError) as error:
@@ -109,11 +110,12 @@ class LabRepository:
             step.get("duration_s") or step.get("estimated_movement_s") or step.get("estimated_measurement_s") or step.get("seconds") or 0
             for step in plan["steps"])
         warnings = []
-        if any(is_measurement(step) for step in sequence["steps"]):
+        if any(is_measurement(step) for step in flattened["steps"]):
             warnings.append("测量参数可保存，但电化学工作站尚未接入，测量动作不能执行。")
-            if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in sequence["steps"]):
+            if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in flattened["steps"]):
                 warnings.append("部分测量动作尚未指定参比电极；当前电位参数仅为编排草稿。")
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
+                "blocks": block_ranges(sequence),
                 "cell_safety": cell_safety, "safety_policy": load_policy(),
                 "hardware_executed": False, "generated_at": utc_now()}
 
@@ -142,16 +144,21 @@ class LabRepository:
                 issue = "方案内容需要是 JSON 对象。"
         except ApiError:
             issue = "文件不是有效的 JSON，可查看内容或下载后修复。"
-        steps = sequence.get("steps") if isinstance(sequence, dict) else None
+        steps = None
         schema = sequence.get("schema_version") if isinstance(sequence, dict) else None
-        editable = type(schema) is int and schema == 2 and isinstance(steps, list) and all(isinstance(step, dict) for step in steps)
+        try:
+            steps = flatten_sequence(sequence, allow_empty=True).get('steps')
+        except (ValueError, KeyError, TypeError):
+            pass
+        editable = isinstance(steps, list) and all(isinstance(step, dict) for step in steps)
         if issue is None and not editable:
-            issue = "此文件不是可编辑的 schema_version=2 实验方案。"
+            issue = "此文件不是可编辑的 schema_version=2 或 3 实验方案。"
         description = sequence.get("description", "") if isinstance(sequence, dict) else ""
         companion = path.with_suffix(".md")
         record = {"id": name, "filename": path.name,
                   "description": description if isinstance(description, str) else "",
                   "step_count": len(steps) if isinstance(steps, list) else 0,
+                  "block_count": len(sequence['blocks']) if editable and schema == 3 else (1 if editable and steps else 0),
                   "modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
                   "size_bytes": len(raw), "version": hashlib.sha256(raw).hexdigest(),
                   "schema_version": schema if type(schema) is int else None,
@@ -321,7 +328,8 @@ class LabRepository:
         start, end = "<!-- pump-console:start -->", "<!-- pump-console:end -->"
         rows = ["| 步骤 | 设备 | 动作 | 液体 | 体积 / 流路 / 方法 |", "| --- | --- | --- | --- | --- |"]
         measurement_blocks = []
-        for index, step in enumerate(sequence["steps"], 1):
+        flattened = flatten_sequence(sequence)
+        for index, step in enumerate(flattened["steps"], 1):
             values = [str(index), step["device"], step["operation"], step.get("fluid", "—"),
                       str(step.get("volume_ml", step.get("route", step.get("technique", "—"))))]
             rows.append("| " + " | ".join(value.replace("|", r"\|") for value in values) + " |")
@@ -329,9 +337,11 @@ class LabRepository:
                 measurement_blocks.append(f"\n\n### 第 {index} 步：循环伏安法参数（尚未接入工作站）\n\n" +
                     "~~~json\n" + json.dumps(step["parameters"],ensure_ascii=False,indent=2) + "\n~~~\n" +
                     "JSON 使用 V、V/s、A 和 s；圈数为完整循环数。电位以所填参比电极为准。\n")
+        groups = block_ranges(sequence)
+        group_text = "\n\n功能块顺序：" + " → ".join(f"{item['id']}（动作 {item['first_step']}–{item['last_step']}）" for item in groups) if groups else ""
         block = (
             f"{start}\n## 图形化编辑器配置摘要\n\n"
-            f"方案：{sequence['id']}\n\n" + "\n".join(rows) + "".join(measurement_blocks) +
+            f"方案：{sequence['id']}" + group_text + "\n\n" + "\n".join(rows) + "".join(measurement_blocks) +
             "\n\n此文件由 Pump Console 保存。完成了配置校验和离线预览，未执行硬件动作。\n"
             "液体体积由现有模板换算；计时估算不包含阀动作与通讯时间。\n" + end)
         if existing is None:

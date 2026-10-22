@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 import re
 import json
+from .workflow import flatten_sequence
 
 MEASUREMENT_DEVICE = "electrochemical_station"
 CV_FIELDS = {"initial_potential_v", "upper_potential_v", "lower_potential_v", "final_potential_v",
@@ -80,6 +81,7 @@ def validate_measurement(step):
 
 
 def compile_workflow(sequence, devices, templates, compiler, config):
+    sequence = flatten_sequence(sequence)
     config.keys(sequence, {"schema_version","id","description","steps","notes"},
                 {"schema_version","id","description","steps"}, "总流程")
     steps = sequence["steps"]

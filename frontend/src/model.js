@@ -1,13 +1,15 @@
 import { cvErrors, isMeasurement } from './cv.js';
 import { cellVolumes, defaultSafetyPolicy } from './cellSafety.js';
+import { flattenSequence, workflowSequence, workflowErrors, workflowToEditor, uiKey } from './workflow.js';
+export { uiKey } from './workflow.js';
 export const fluidLabels = { water: '超纯水', waste_liquid: '废液', sulfuric_acid: '硫酸', electrolyte: '电解液' };
 export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量' };
-let nextKey = 1;
-export const uiKey = () => 'step-ui-' + nextKey++;
 export function toEditor(sequence) {
+  if(sequence.schema_version===3) return workflowToEditor(sequence);
   return { ...sequence, steps: sequence.steps.map(step => ({ ...structuredClone(step), _key: uiKey() })) };
 }
 export function toSequence(draft) {
+  if(draft.blocks) return workflowSequence(draft);
   return {
     schema_version: 2, id: draft.id, description: draft.description,
     notes: draft.notes || ['Review this experiment before hardware execution.'],
@@ -33,11 +35,13 @@ export function moveStep(steps, from, to) {
 }
 export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) {
   const errors = [];
+  if(draft.blocks) errors.push(...workflowErrors(toSequence(draft)));
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(draft.id)) errors.push('方案 ID 请使用字母开头的英文、数字、下划线或短横线。');
   if (/[\u3400-\u9fff]/.test(JSON.stringify(toSequence(draft)))) errors.push('保存的 JSON 内容请使用英文。');
-  if (!draft.steps.length) errors.push('请先添加至少一个操作步骤。');
+  const flat=flattenSequence(toSequence(draft));
+  if (!flat.steps.length) errors.push('请先添加至少一个操作步骤。');
   const routes = {};
-  draft.steps.forEach((step, index) => {
+  flat.steps.forEach((step, index) => {
     const prefix = '第 ' + (index + 1) + ' 步';
     const template = templates[step.device];
     if (!template) { errors.push(prefix + '设备模板不存在。'); return; }
@@ -56,7 +60,7 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
       if (template.device.kind === 'syringe' && step.volume_ml > template.device.capacity_ml) errors.push(prefix + '超出注射泵容量。');
     }
   });
-  return [...errors,...cellVolumes(draft,safetyPolicy,templates).errors];
+  return [...errors,...cellVolumes(flat,safetyPolicy,templates).errors];
 }
 export function formatDuration(seconds) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '待预演';

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "kind": "function_block",
+  "id": "drain_waste_2",
+  "description": "Select waste 2 and withdraw liquid",
+  "steps": [
+    {"device": "valve", "operation": "switch_route", "route": "waste_2"},
+    {"device": "peristaltic_2", "operation": "withdraw", "fluid": "waste_liquid", "volume_ml": 18}
+  ]
+}

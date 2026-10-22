@@ -1,0 +1,85 @@
+{
+  "schema_version": 3,
+  "id": "demo_block_experiment",
+  "description": "Synthetic rinse and electrolyte transfer workflow",
+  "notes": [
+    "Review all block parameters and discharge routing before use."
+  ],
+  "blocks": [
+    {
+      "id": "water_rinse",
+      "description": "Inject water and drain to waste 1",
+      "steps": [
+        {
+          "device": "peristaltic_1",
+          "operation": "inject",
+          "fluid": "water",
+          "volume_ml": 10
+        },
+        {
+          "device": "valve",
+          "operation": "switch_route",
+          "route": "waste_1"
+        },
+        {
+          "device": "peristaltic_2",
+          "operation": "withdraw",
+          "fluid": "waste_liquid",
+          "volume_ml": 12
+        }
+      ]
+    },
+    {
+      "id": "electrolyte_injection",
+      "description": "Transfer electrolyte into the cell using the syringe pump",
+      "steps": [
+        {
+          "device": "syringe_c",
+          "operation": "inject",
+          "fluid": "electrolyte",
+          "volume_ml": 15
+        }
+      ]
+    },
+    {
+      "id": "drain_waste_2",
+      "description": "Select waste 2 and withdraw liquid",
+      "steps": [
+        {
+          "device": "valve",
+          "operation": "switch_route",
+          "route": "waste_2"
+        },
+        {
+          "device": "peristaltic_2",
+          "operation": "withdraw",
+          "fluid": "waste_liquid",
+          "volume_ml": 18
+        }
+      ]
+    },
+    {
+      "id": "water_rinse_final",
+      "description": "Inject water and drain to waste 1",
+      "steps": [
+        {
+          "device": "peristaltic_1",
+          "operation": "inject",
+          "fluid": "water",
+          "volume_ml": 10
+        },
+        {
+          "device": "valve",
+          "operation": "switch_route",
+          "route": "waste_1"
+        },
+        {
+          "device": "peristaltic_2",
+          "operation": "withdraw",
+          "fluid": "waste_liquid",
+          "volume_ml": 12
+        }
+      ]
+    }
+  ]
+}

@@ -9,7 +9,7 @@ export function ExperimentFileList({ items, selectedId, activeId, onSelect, onOp
   return <table className="experiment-file-table"><thead><tr><th scope="col">方案文件</th><th scope="col">步骤</th><th scope="col">修改时间</th><th scope="col">大小</th><th scope="col"><span className="file-sr-only">选择</span></th></tr></thead><tbody>
     {items.map(item=><tr key={item.id} className={selectedId===item.id?'file-row-selected':''} onClick={()=>!disabled && onSelect(item.id)} onDoubleClick={()=>!disabled && item.editable && onOpen(item.id)}>
       <td><button className="experiment-file-name" type="button" onClick={()=>onSelect(item.id)} disabled={disabled} aria-pressed={selectedId===item.id} aria-label={'查看 '+item.id+' 的文件详情'}><span className={'file-type-icon file-kind-'+experimentKind(item)}><FileJson size={22}/></span><span><strong>{item.filename || item.id+'.json'}{activeId===item.id && <i>已加载</i>}</strong><small>{item.description || experimentKindLabels[experimentKind(item)]}</small></span></button></td>
-      <td><span className="file-steps-count">{item.step_count}<small>步</small></span></td><td><time dateTime={item.modified_at}>{timeText(item.modified_at)}</time></td><td>{fileSize(item.size_bytes)}</td><td><ChevronRight size={14}/></td>
+      <td><span className="file-steps-count">{item.step_count}<small>动作{item.block_count?' · '+item.block_count+' 块':''}</small></span></td><td><time dateTime={item.modified_at}>{timeText(item.modified_at)}</time></td><td>{fileSize(item.size_bytes)}</td><td><ChevronRight size={14}/></td>
     </tr>)}
   </tbody></table>;
 }

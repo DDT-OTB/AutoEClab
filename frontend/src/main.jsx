@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import AuthGate from './AuthGate.jsx';
 import './styles.css';
 import './editor.css';
+import './workflow.css';
 import './equipment.css';
 import './apparatus.css';
 import './accounts.css';

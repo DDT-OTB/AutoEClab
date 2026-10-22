@@ -3,6 +3,7 @@ from decimal import Decimal
 import json
 import math
 from pathlib import Path
+from .workflow import flatten_sequence
 
 
 class CellSafetyError(ValueError):
@@ -23,6 +24,7 @@ def load_policy():
 
 
 def analyze_volumes(sequence, policy, plan=None):
+    sequence = flatten_sequence(sequence)
     limit = Decimal(str(policy['cell']['capacity_ml']))
     current, peak = Decimal(0), Decimal(0)
     rows, violations = [], []

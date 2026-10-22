@@ -124,6 +124,9 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         return self.status_stream(token)
                     if path == "/api/health":
                         return self.json_response(200, repository.health())
+                    if path == "/api/function-blocks":
+                        from .workflow import function_block_templates
+                        return self.json_response(200, {"blocks": function_block_templates()})
                     if path == "/api/templates":
                         return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(), "safety_policy": load_policy()})
                     if path == "/api/status":

@@ -192,6 +192,24 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertIsNone(final['runtime']['active_step'])
         self.assertIsNone(final['motion_commands_sent'])
 
+    def test_function_blocks_execute_in_order_through_the_real_worker_against_only_synthetic_devices(self):
+        # These are private PTYs from setUp, never production serial ports.
+        action = self.sequence['steps'][0]
+        self.sequence = {key: value for key, value in self.sequence.items() if key != 'steps'}
+        self.sequence.update(schema_version=3, blocks=[
+            {'id': 'first_dose', 'description': 'First synthetic dose', 'steps': [{**action, 'volume_ml': .04}]},
+            {'id': 'second_dose', 'description': 'Second synthetic dose', 'steps': [{**action, 'volume_ml': .08}]}])
+        prepared = self.start()
+        self.wait_for(lambda: self.repo.execution.snapshot()['current']['state']=='completed')
+        self.wait_for(lambda: not self.repo.execution.snapshot()['current']['controller_alive'])
+        self.assertEqual(self.pump.commands.count(0x47), 2)
+        journal = self.repo.logs_dir / ('run-'+prepared['run_id']+'.jsonl')
+        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        started = [event['step'] for event in events if event['event']=='step_started']
+        self.assertEqual([step['id'] for step in started], ['block_001_step_001','block_002_step_001'])
+        self.assertEqual([step['volume_ml'] for step in started], [.04,.08])
+        self.assertEqual(self.repo.status()['runtime']['completed_steps'], 2)
+
     def test_admin_stop_cleans_up_and_state_survives_repository_restart(self):
         self.sequence['steps'][0]['volume_ml'] = 10
         prepared = self.start()
