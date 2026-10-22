@@ -14,7 +14,7 @@ export function ExperimentFileList({ items, selectedId, activeId, onSelect, onOp
   </tbody></table>;
 }
 
-export function ExperimentFileDetails({ item, content, loading, tab, setTab, user, activeId, dirty, busy, onOpen, onDownload, onAction }) {
+export function ExperimentFileDetails({ item, content, loading, tab, setTab, user, activeId, dirty, busy, onOpen, onDownload, onAction,onUse }) {
   if(!item) return <aside className="experiment-file-inspector"><div className="file-details-empty"><span><FolderOpen size={32}/></span><h3>选择一份实验方案</h3><p>查看文件信息、JSON 内容，<br/>或管理已有方案。</p></div></aside>;
   const editable=user?.role==='admin';
   return <aside className="experiment-file-inspector" aria-label="实验方案文件详情">
@@ -28,12 +28,13 @@ export function ExperimentFileDetails({ item, content, loading, tab, setTab, use
       {activeId===item.id && <p className="file-loaded-note"><CheckCircle2 size={13}/>{dirty?'编排中有未保存的修改，文件操作会保留草稿。':'当前已加载到实验编排。'}</p>}
     </div>
     <div className="file-details-actions"><button type="button" className="primary-button" onClick={()=>onOpen(item.id)} disabled={busy || !item.editable}><ArrowUpRight size={14}/>{editable?'进入编排编辑':'查看实验流程'}</button><button type="button" className="outline-button" onClick={onDownload} disabled={busy || loading || content===null}><Download size={14}/>下载 JSON</button>
+      {onUse && <button type="button" className="outline-button file-run-button" onClick={()=>onUse(item.id)} disabled={busy || !item.editable} title="只载入流程，仍需管理员确认后启动">载入实验运行<ArrowUpRight size={14}/></button>}
       {editable ? <><div className="file-secondary-actions"><button type="button" onClick={()=>onAction('rename',item)} disabled={busy || !item.editable}><Pencil size={13}/>重命名</button><button type="button" onClick={()=>onAction('duplicate',item)} disabled={busy || !item.editable}><Copy size={13}/>复制方案</button></div><button type="button" className="file-delete-button" onClick={()=>onAction('delete',item)} disabled={busy}><Trash2 size={13}/>删除方案</button></> : <p className="file-readonly-note">只读账号可查看、下载和预演方案。</p>}
     </div>
   </aside>;
 }
 
-export default function ExperimentManager({ items, user, activeId, dirty, appBusy, onReload, onOpen, onNew, onImport, onBack, onChanged }) {
+export default function ExperimentManager({ items, user, activeId, dirty, appBusy, onReload, onOpen, onNew, onImport, onBack, onChanged,onUse,embedded=false }) {
   const [query,setQuery]=useState(''),[kind,setKind]=useState('all'),[sort,setSort]=useState('modified');
   const [selectedId,setSelectedId]=useState(activeId),[detail,setDetail]=useState(null),[detailLoading,setDetailLoading]=useState(false),[tab,setTab]=useState('info');
   const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
@@ -98,7 +99,7 @@ export default function ExperimentManager({ items, user, activeId, dirty, appBus
     const link=document.createElement('a');link.href=url;link.download=current.filename;link.click();URL.revokeObjectURL(url);
   }
   return <section className="experiment-manager" aria-label="实验方案文件管理">
-    <div className="section-heading file-page-heading"><div><span className="eyebrow">EXPERIMENT FILES</span><h2>实验方案 <span className="count">{items.length} 个文件</span></h2><p>查找与管理方案文件，选中后可查看详情或进入流程编排。</p></div><button className="outline-button" type="button" onClick={onBack}><ArrowLeft size={14}/>返回编排</button></div>
+    {!embedded && <div className="section-heading file-page-heading"><div><span className="eyebrow">EXPERIMENT FILES</span><h2>实验方案 <span className="count">{items.length} 个文件</span></h2><p>查找与管理方案文件，选中后可查看详情或进入流程编排。</p></div><button className="outline-button" type="button" onClick={onBack}><ArrowLeft size={14}/>返回编排</button></div>}
     <div className="file-workspace">
       <header className="file-workspace-header"><div className="file-folder-breadcrumb"><span><FolderOpen size={18}/></span><strong>实验方案</strong><ChevronRight size={12}/><small>全部文件</small></div><div className="file-workspace-tools"><button type="button" className="subtle-button" onClick={onImport} disabled={disabled || user?.role!=='admin'}><Upload size={14}/>导入 JSON</button><button type="button" className="primary-button" onClick={onNew} disabled={disabled || user?.role!=='admin'}><Plus size={15}/>新建方案</button></div></header>
       <div className="file-filter-bar"><label className="file-search"><Search size={16}/><input aria-label="搜索实验方案" placeholder="搜索文件名或方案描述…" value={query} onChange={event=>setQuery(event.target.value)}/>{query && <button type="button" aria-label="清空搜索" onClick={()=>setQuery('')}><X size={13}/></button>}</label><label className="file-kind-filter"><SlidersHorizontal size={14}/><select aria-label="筛选方案类型" value={kind} onChange={event=>setKind(event.target.value)}><option value="all">全部类型</option><option value="fluidics">泵阀流程</option><option value="measurement">包含测量</option><option value="draft">空白草稿</option><option value="review">待检查</option></select></label><label className="file-sort"><select aria-label="排序实验方案" value={sort} onChange={event=>setSort(event.target.value)}><option value="modified">最近修改优先</option><option value="name">文件名 A–Z</option><option value="steps">步骤数量</option></select></label><button className="file-refresh" type="button" onClick={refresh} disabled={loading || disabled} aria-label="刷新实验方案列表"><RefreshCw size={15} className={loading?'refresh-spinning':''}/></button></div>
@@ -108,7 +109,7 @@ export default function ExperimentManager({ items, user, activeId, dirty, appBus
         <div className="file-list-caption"><span>{loading?'正在刷新…':'显示 '+visible.length+' / '+items.length+' 个方案'}</span><small>{user?.role==='admin'?'管理员可管理文件':'只读访问'}</small></div>
         {visible.length ? <div className="file-table-scroll"><ExperimentFileList items={visible} selectedId={selectedId} activeId={activeId} onSelect={select} onOpen={onOpen} disabled={disabled}/></div> : <div className="file-list-empty"><span>{query || kind!=='all'?<Search size={31}/>:<FolderOpen size={34}/>}</span><h3>{query || kind!=='all'?'没有匹配的方案':'还没有实验方案'}</h3><p>{query || kind!=='all'?'尝试其他文件名、描述或筛选条件。':'新建方案，或导入一份英文 JSON 开始编排。'}</p>{(query || kind!=='all') && <button type="button" className="outline-button" onClick={()=>{setQuery('');setKind('all');}}>清除筛选</button>}</div>}
         <footer className="file-list-footer"><FileText size={13}/><span>双击文件进入编排 · 同名说明文档随方案一起管理</span></footer>
-      </div><div className="file-details-column"><ExperimentFileDetails item={current} content={content} loading={detailLoading} tab={tab} setTab={setTab} user={user} activeId={activeId} dirty={dirty} busy={disabled} onOpen={onOpen} onDownload={download} onAction={beginAction}/>
+      </div><div className="file-details-column"><ExperimentFileDetails item={current} content={content} loading={detailLoading} tab={tab} setTab={setTab} user={user} activeId={activeId} dirty={dirty} busy={disabled} onOpen={onOpen} onUse={onUse} onDownload={download} onAction={beginAction}/>
         {action && <form className={'file-operation-form operation-'+action.type} onSubmit={submitAction} aria-label={action.type==='delete'?'确认删除实验方案':action.type==='rename'?'重命名实验方案':'复制实验方案'}><div><strong>{action.type==='delete'?'删除方案':action.type==='rename'?'重命名方案':'复制为新方案'}</strong><button type="button" onClick={()=>setAction(null)} disabled={busy} aria-label="取消文件操作"><X size={14}/></button></div><p>{action.item.filename}</p>{action.type==='delete' ? <p className="file-delete-confirmation">将删除此 JSON 和同名说明文档。删除前会自动备份，其他方案不受影响。</p> : <label><span>新方案 ID</span><input required autoFocus value={newId} onChange={event=>setNewId(event.target.value)} maxLength={80} pattern="[A-Za-z][A-Za-z0-9_-]{0,79}" aria-label="新方案文件名" disabled={busy} spellCheck={false}/><small>文件名为 {newId || 'experiment'}.json</small></label>}<div className="file-operation-buttons"><button type="button" className="outline-button" disabled={busy} onClick={()=>setAction(null)}>取消</button><button type="submit" className={action.type==='delete'?'file-danger-submit':'primary-button'} disabled={disabled || (action.type!=='delete' && !!fileNameError(newId,action.item.id,items))}>{busy?'正在保存…':action.type==='delete'?'确认删除':'确认保存'}</button></div></form>}
       </div></div>
     </div>

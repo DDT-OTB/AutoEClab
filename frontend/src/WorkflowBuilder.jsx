@@ -7,7 +7,7 @@ import {isMeasurement,stepSummary} from './cv.js';
 
 const labels={water_rinse:'水洗',drain_waste_1:'排至废液 1',drain_waste_2:'排至废液 2',electrolyte_injection:'加入电解液'};
 
-export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,shortNames,onAddBlock,onAddAction,onImport,onNew,onTemplates,mode,onMode,elementRef,canManage,onManage,onEditTemplate}) {
+export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,shortNames,onAddBlock,onAddAction,onImport,onNew,mode,onMode,elementRef,canManage,onManage,onEditTemplate}) {
   return <aside className="palette block-palette" ref={elementRef}>
     <div className="panel-heading"><span>编排组件</span><span className="tiny-label">LIBRARY</span></div>
     <div className="palette-tabs" role="tablist" aria-label="编排组件类型">
@@ -29,7 +29,6 @@ export function BlockPalette({blocks,templates,measurementTemplates,activeBlock,
         <span className="palette-icon"><ActionIcon kind={template.device.kind} size={17}/></span><span><strong>{shortNames[id] || id}</strong><small>{operationLabels[template.action.operation]} · {fluidLabels[template.action.fluid] || (id==='valve'?'废液流路':'参数草稿')}</small></span><Plus size={15}/>
       </button>)}
     </>}
-    <div className="template-link"><button onClick={onTemplates}>查看设备默认参数</button></div>
   </aside>;
 }
 
@@ -65,11 +64,11 @@ export function BlockCanvas({blocks,selected,runningIndex,templates,shortNames,o
   </div>;
 }
 
-export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,onTemplates,cellBudget,offset,runningIndex,canManage,onSaveTemplate}) {
+export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,cellBudget,offset,runningIndex,canManage,onSaveTemplate}) {
   if(!block) return <div className="inspector-empty"><Boxes size={30}/><h3>选择一个功能块</h3><p>实验由多个功能块顺序组成。<br/>在这里编辑块内动作与参数。</p></div>;
   if(selectedStep) return <div className="block-action-detail">
     <button className="block-back" onClick={()=>onSelectAction(null)}><ChevronLeft size={14}/>返回 {block.id} 的动作列表</button>
-    <ActionInspector key={selectedStep._key} step={selectedStep} template={templates[selectedStep.device]} index={offset+block.steps.findIndex(step=>step._key===selectedStep._key)} title={names[selectedStep.device] || selectedStep.device} onChange={onUpdateAction} onOpenTemplates={onTemplates}/>
+    <ActionInspector key={selectedStep._key} step={selectedStep} template={templates[selectedStep.device]} index={offset+block.steps.findIndex(step=>step._key===selectedStep._key)} title={names[selectedStep.device] || selectedStep.device} onChange={onUpdateAction}/>
   </div>;
   return <div className="block-editor">
     <div className="block-editor-heading"><span className="eyebrow">FUNCTION BLOCK {blockIndex+1}</span><h3>功能块与内部动作</h3>{canManage && <button className="block-save-template" onClick={onSaveTemplate}><Save size={13}/>保存到功能块库</button>}<button className="block-export" onClick={onExport}><Download size={13}/>导出功能块 JSON</button></div>

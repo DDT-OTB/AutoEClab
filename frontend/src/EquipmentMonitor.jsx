@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowLeft, ChevronRight, CircleHelp, Radio, RefreshCw } from 'lucide-react';
 import { ActionIcon } from './FlowStep.jsx';
-import { fluidLabels, formatDuration, operationLabels } from './model.js';
+import { formatDuration, operationLabels } from './model.js';
 import { progressPercent } from './monitor.js';
 import { deviceQuickInfo, equipmentStatusSource, equipmentSummary, hardwareReason } from './equipment.js';
 
@@ -20,14 +20,13 @@ function DeviceDetails({ item, fresh }) {
   const currentHardware=fresh && hardware && !hardware.stale && activity.source==='hardware';
   const programActivity=fresh && activity.source!=='hardware' && ['executing','waiting','completed','error'].includes(activity.state);
   const percent=progressPercent(activity);
-  const fluid=fluidLabels[item.template?.action?.fluid];
   return <div className="equipment-device-details">
     <div className={'device-detail-identity tone-'+item.tone}>
       <span className="monitor-device-icon"><ActionIcon kind={config.kind} size={23}/></span>
       <div><h4>{item.name}</h4><code>{item.id}</code></div>
     </div>
     <div className="device-detail-state"><EquipmentState activity={activity}/><span>{equipmentStatusSource(item,fresh)}</span></div>
-    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数已可在下方编排。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : <>
+    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数可在“实验方案”中设置。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : <>
       {programActivity ? <section className="equipment-current-action" aria-label="本次程序动作">
         <div className="detail-section-title"><span>本次程序动作</span><strong>{operationLabels[activity.operation] || activity.label}</strong></div>
         <div className="current-action-target">{typeof activity.volume_ml==='number' ? <><strong>{activity.volume_ml}</strong><span>mL · 目标体积</span></> : <strong>{routeName(activity.route) || '设备动作'}</strong>}</div>
@@ -43,17 +42,6 @@ function DeviceDetails({ item, fresh }) {
         {hardware.valve_position && <><dt>注射泵阀位</dt><dd>{hardware.valve_position.toLowerCase()==='i'?'I · 吸入口':hardware.valve_position.toLowerCase()==='o'?'O · 注出口':hardware.valve_position}</dd></>}
       </dl>}
       {hardware?.reason && <p className="equipment-device-hint">{!currentHardware?'上次读取提示：':''}{hardwareReason[hardware.reason] || '设备状态尚未确认，请检查连接与通信设置。'}</p>}
-      <section className="equipment-template-settings" aria-label="设备模板参数">
-        <div className="detail-section-title"><span>设备模板参数</span><small>设定值</small></div>
-        <dl>
-          {fluid && <><dt>{item.template.action.operation==='withdraw'?'输出液体':'注入液体'}</dt><dd>{fluid}</dd></>}
-          {config.rpm!==undefined && <><dt>模板转速</dt><dd>{config.rpm} rpm</dd></>}
-          {config.speed_steps_s!==undefined && <><dt>模板步速</dt><dd>{config.speed_steps_s} 步/秒</dd></>}
-          {config.capacity_ml!==undefined && <><dt>注射器容量</dt><dd>{config.capacity_ml} mL</dd></>}
-          {config.calibration?.flow_ml_min!==undefined && <><dt>标定参考流量</dt><dd>约 {config.calibration.flow_ml_min} mL/min</dd></>}
-          {config.channels!==undefined && <><dt>通道数量</dt><dd>{config.channels}</dd><dt>废液 1 / 废液 2</dt><dd>通道 {config.routes?.waste_1 ?? '—'} / {config.routes?.waste_2 ?? '—'}</dd></>}
-        </dl>
-      </section>
       <details className="equipment-connection-details"><summary>通信与记录 <ChevronRight size={13}/></summary><dl>
         <dt>串口节点</dt><dd>{device?.port_present===true?'存在':device?.port_present===false?'未发现':'待确认'}<small>节点存在不代表设备已通电</small></dd>
         <dt>设备接口</dt><dd><code>{config.port || '未配置'}</code></dd>

@@ -25,11 +25,11 @@ test('only a connected administrator with a supported valid plan can prepare aut
 test('viewer monitoring never renders start or stop controls even while a task runs',()=>{
   const html=render(AutomationControl,{user:{role:'viewer'},sequence,status:{execution:{enabled:true,current:{state:'running',controller_alive:true,can_stop:true,sequence_id:sequence.id,started_by:'synthetic_admin'}}},fresh:true,errors:[],names:{}});
   assert.match(html,/只读监测/);assert.match(html,/自动化执行中/);
-  assert.doesNotMatch(html,/运行当前编排|停止当前实验|确认启动设备/);
+  assert.doesNotMatch(html,/运行已载入流程|停止当前实验|确认启动设备/);
 });
 test('administrator sees stop for the current run and start is disabled while it owns hardware',()=>{
   const html=render(AutomationControl,{user:{role:'admin'},sequence,status:{execution:{enabled:true,current:{state:'running',controller_alive:true,can_stop:true,sequence_id:sequence.id,started_by:'synthetic_admin'}}},fresh:true,errors:[],names:{}});
-  assert.match(html,/停止当前实验/);assert.match(html,/运行当前编排/);
+  assert.match(html,/停止当前实验/);assert.match(html,/运行已载入流程/);
   assert.match(html,/<button class="primary-button" disabled=""/);
 });
 test('disconnected execution monitoring does not claim a live running state and retains the stop request control',()=>{
@@ -72,4 +72,14 @@ test('automation requests carry CSRF, fixed run identity and version without cli
   for(const call of calls.slice(1)) {assert.equal(call.options.headers['X-CSRF-Token'],'synthetic-csrf');assert.equal(call.options.headers['X-Pump-Console'],'1');}
   assert.deepEqual(JSON.parse(calls[2].options.body),{run_id:'run-id',version:'snapshot-version'});
   assert.deepEqual(JSON.parse(calls[3].options.body),{run_id:'run-id'});
+});
+
+test('non-execution workspaces do not render the automation control panel',()=>{
+  const html=render(AutomationControl,{...settings,user:{role:'admin'},sequence,status:{execution:{enabled:true}},fresh:true,errors:[],names:{},visible:false});
+  assert.equal(html,'');
+});
+test('no loaded plan disables starting while the current experiment can still be stopped',()=>{
+  const html=render(AutomationControl,{user:{role:'admin'},sequence,status:{execution:{enabled:true,current:{state:'running',controller_alive:true,can_stop:true,sequence_id:sequence.id,started_by:'synthetic_admin'}}},fresh:true,errors:[],names:{},hasSequence:false});
+  assert.match(html,/停止当前实验/);assert.match(html,/运行已载入流程/);assert.match(html,/<button class="primary-button" disabled=""/);
+  assert.doesNotMatch(html,/本方案预计峰值/);
 });

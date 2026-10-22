@@ -84,7 +84,7 @@ test('default layout renders the apparatus and six selectable status rows',()=>{
   assert.match(html,/测量预留/);
   assert.doesNotMatch(html,/启动泵|停止泵|开始测量/);
 });
-test('selected device shows program progress and configured values with an explicit back control',()=>{
+test('selected device shows live program progress and hides device template settings',()=>{
   const status=runningStatus(), items=itemsFor(status);
   const html=render(EquipmentMonitor,{items,selectedItem:items[0],fresh:true,role:'admin'});
   assert.match(html,/全部设备/);
@@ -92,8 +92,7 @@ test('selected device shows program progress and configured values with an expli
   assert.match(html,/控制程序事件/);
   assert.match(html,/aria-valuenow="40"/);
   assert.match(html,/目标体积/);
-  assert.match(html,/模板转速/);
-  assert.match(html,/100 rpm/);
+  assert.doesNotMatch(html,/设备模板参数|模板转速/);
   assert.match(html,/不是流量传感器实测值/);
   assert.doesNotMatch(html,/class="equipment-monitor-row /);
 });

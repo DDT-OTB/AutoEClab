@@ -44,7 +44,7 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
   flat.steps.forEach((step, index) => {
     const prefix = '第 ' + (index + 1) + ' 步';
     const template = templates[step.device];
-    if (!template) { errors.push(prefix + '设备模板不存在。'); return; }
+    if (!template) { errors.push(prefix + '设备配置尚未就绪。'); return; }
     if (step.operation !== template.action.operation) errors.push(prefix + '操作与模板不一致。');
     if (isMeasurement(step)) {
       if (step.device !== 'electrochemical_station' || step.technique !== 'cyclic_voltammetry') errors.push(prefix + '仅支持电化学工作站的循环伏安法草稿。');

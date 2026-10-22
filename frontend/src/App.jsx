@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, CircleHelp, Clipboard,
-  Code2, Download, FileJson, FlaskConical, FolderOpen, History, LayoutDashboard,
-  Link2, LockKeyhole, Plus, RefreshCw, Save, Settings2, ShieldCheck,
-  Unplug, Users, Workflow, X,
+  Code2, Download, FileJson, FlaskConical, FolderOpen, History, Link2,
+  LockKeyhole, Plus, RefreshCw, Save, ShieldCheck, Unplug, Users,
+  Workflow, X,
 } from 'lucide-react';
 import { appApi as api } from './api.js';
 import { draftErrors, formatDuration, makeStep, moveStep, toSequence, uiKey } from './model.js';
@@ -12,6 +12,9 @@ import { liveStepIndex } from './monitor.js';
 import { refreshAllStatus, refreshMessage } from './refresh.js';
 import {BlockPalette,BlockCanvas,BlockInspector} from './WorkflowBuilder.jsx';
 import BlockLibraryManager from './BlockLibraryManager.jsx';
+import WorkspaceNav,{PlanWorkspaceTabs} from './WorkspaceNav.jsx';
+import RunWorkspace from './RunWorkspace.jsx';
+import {emptyRunSequence,runSnapshot,workspacePage,workspacePages} from './workspace.js';
 import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
@@ -39,7 +42,7 @@ const timeText = value => value ? new Date(value).toLocaleString('zh-CN', {
   month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
 }) : '暂无记录';
 
-export default function App({ user, onLogout, onChangePassword, loggingOut }) {
+export default function App({ user, onLogout, onChangePassword, loggingOut,initialPage,initialPlanView='files' }) {
   const [templates, setTemplates] = useState({});
   const [measurementTemplates, setMeasurementTemplates] = useState({});
   const [blockTemplates,setBlockTemplates]=useState([]);
@@ -56,7 +59,10 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [base, setBase] = useState({ id: null, version: null });
   const [dirty, setDirty] = useState(false);
   const [plan, setPlan] = useState(null);
-  const [submittedSequence,setSubmittedSequence]=useState(null);
+  const [runSequence,setRunSequence]=useState(null);
+  const [runSource,setRunSource]=useState(null);
+  const [runPlan,setRunPlan]=useState(null);
+  const [submittedRun,setSubmittedRun]=useState(null);
   const [connected, setConnected] = useState(false);
   const [latency, setLatency] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,17 +74,18 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const [rightTab, setRightTab] = useState('parameters');
   const [modal, setModal] = useState(null);
   const [importText, setImportText] = useState('');
-  const [activeNav, setActiveNav] = useState('editor');
-  const previousNav = useRef('editor');
-  const historyRef = useRef(null);
-  const editorRef = useRef(null);
+  const [activeNav,setActiveNav]=useState(()=>workspacePage(initialPage ?? (typeof window==='undefined'?'':window.location.hash)));
+  const [planView,setPlanView]=useState(initialPlanView);
   const inspectorRef = useRef(null);
   const paletteRef=useRef(null);
   const inspectorBodyRef=useRef(null);
   const editorSnapshot = useRef({draft,base,dirty});
   editorSnapshot.current={draft,base,dirty};
   const sequence = useMemo(() => toSequence(draft), [draft]);
-  const flatSequence=useMemo(()=>flattenSequence(sequence),[sequence]);
+  const executionSequence=runSequence || emptyRunSequence;
+  const flatRun=useMemo(()=>flattenSequence(executionSequence),[executionSequence]);
+  const runErrors=useMemo(()=>runSequence?draftErrors(runSequence,actionTemplates):['请先加载或导入一个实验流程。'],[runSequence,actionTemplates]);
+  const runMeasurementCount=flatRun.steps.filter(isMeasurement).length;
   const steps=useMemo(()=>draft.blocks.flatMap(block=>block.steps),[draft.blocks]);
   const cellBudget=useMemo(()=>cellVolumes(sequence,undefined,actionTemplates),[sequence,actionTemplates]);
   const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
@@ -90,7 +97,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   const blockIndex=draft.blocks.findIndex(block=>block._key===selectedBlock);
   const blockOffset=draft.blocks.slice(0,Math.max(0,blockIndex)).reduce((sum,block)=>sum+block.steps.length,0);
   const measurementCount = steps.filter(isMeasurement).length;
-  const runningIndex = liveStepIndex(flatSequence, status.runtime, dirty && submittedSequence!==sequenceKey(sequence), fresh);
+  const runningIndex = submittedRun?.run_id===status.execution?.current?.run_id && status.execution?.current?.controller_alive && submittedRun?.key===sequenceKey(executionSequence)
+    ?liveStepIndex(flatRun,status.runtime,false,fresh):-1;
+  const page=workspacePages[activeNav];
   const totals = useMemo(() => {
     const result = { inject: 0, withdraw: 0 };
     steps.forEach(step => {
@@ -117,7 +126,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     try {
       const data = await refreshAllStatus(api, user?.role === 'admin');
       setHealth(data.health); acceptStatus(data.status); setRuns(data.runs);
-      if (JSON.stringify(data.templates) !== JSON.stringify(templates) || JSON.stringify(data.measurement_templates) !== JSON.stringify(measurementTemplates)) setPlan(null);
+      if (JSON.stringify(data.templates) !== JSON.stringify(templates) || JSON.stringify(data.measurement_templates) !== JSON.stringify(measurementTemplates)) {setPlan(null);setRunPlan(null);}
       setTemplates(data.templates);
       setMeasurementTemplates(data.measurement_templates || {});
       setConnected(true); setLatency(Math.round(performance.now() - started));
@@ -147,7 +156,33 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     return result.experiments;
   }
   async function openManagedExperiment(id) {
-    if(await loadExperiment(id)) setActiveNav('editor');
+    if(await loadExperiment(id)) {setPlanView('editor');navigate('plans');}
+  }
+  function navigate(value) {
+    const id=workspacePage(value);setActiveNav(id);
+    if(window.location.hash!=='#'+id)window.history.pushState(null,'','#'+id);
+  }
+  async function loadRunExperiment(id) {
+    setBusy('load-run');setError('');
+    try {
+      const data=await api.experiment(id);
+      setRunSequence(runSnapshot(data.sequence));setRunSource({kind:'file',id,version:data.version,label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
+    }catch(failure){setError(failure.message);}
+    finally{setBusy('');}
+  }
+  function useDesignForRun() {
+    if(errors.length){setError(errors[0]);return;}
+    setRunSequence(runSnapshot(sequence));setRunSource({kind:'draft',id:null,label:'来自流程编辑：'+draft.id+(dirty?'（未保存草稿）':'')});setRunPlan(null);navigate('run');
+  }
+  function editLoadedRun() {
+    if(!runSequence)return;
+    if(sequenceKey(sequence)!==sequenceKey(runSequence)) {
+      if(dirty && !window.confirm('载入此流程进行编辑会替换当前未保存的设计草稿，是否继续？'))return;
+      const value=workflowToEditor(runSequence);
+      setDraft(value);setBase({id:runSource?.id || null,version:runSource?.version || null});setDirty(runSource?.kind!=='file');
+      setSelectedBlock(value.blocks[0]?._key || null);setSelected(null);setPlan(null);
+    }
+    setPlanView('editor');navigate('plans');
   }
   function fileChanged(kind,result) {
     const before=editorSnapshot.current;
@@ -160,13 +195,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
   useEffect(() => {
     (async () => {
       try {
-        const [items, list,library] = await Promise.all([api.templates(), reloadCatalog(),api.functionBlocks()]);
+        const [items, ,library] = await Promise.all([api.templates(), reloadCatalog(),api.functionBlocks()]);
         setBlockTemplates(library.blocks);
         setTemplates(items.templates); setMeasurementTemplates(items.measurement_templates || {});
-        const editable=list.filter(item=>item.editable!==false);
-        const id = editable.some(item => item.id === 'demo_rinse_with_predrain')
-          ? 'demo_rinse_with_predrain' : editable[0]?.id;
-        if (id) await loadExperiment(id, true);
         await refresh();
       } catch (failure) { setError(failure.message); }
     })();
@@ -174,14 +205,11 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     return () => clearInterval(timer);
   }, []);
   useEffect(()=>{
-    if(previousNav.current===activeNav) return;
-    previousNav.current=activeNav;
-    if(activeNav==='experiments') window.scrollTo({top:0,behavior:'smooth'});
-    if(activeNav==='editor' || activeNav==='history') {
-      const frame=requestAnimationFrame(()=>{(activeNav==='history'?historyRef:editorRef).current?.scrollIntoView({behavior:'smooth',block:'start'});});
-      return ()=>cancelAnimationFrame(frame);
-    }
-  },[activeNav]);
+    const changed=()=>setActiveNav(workspacePage(window.location.hash));
+    window.addEventListener('popstate',changed);window.addEventListener('hashchange',changed);
+    return()=>{window.removeEventListener('popstate',changed);window.removeEventListener('hashchange',changed);};
+  },[]);
+  useEffect(()=>{window.scrollTo({top:0,behavior:'auto'});},[activeNav,planView]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(''), 4500);
@@ -295,7 +323,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
     if (dirty && !window.confirm('新建方案会放弃尚未保存的修改，是否继续？')) return false;
     setDraft({...emptyDraft(),id:uniqueExperimentId('new_experiment',catalog)}); setBase({ id: null, version: null }); setDirty(true);
     setPlan(null); setSelected(null);setSelectedBlock(null); setError('');
-    setRightTab('parameters');setActiveNav('editor');setModal(null);return true;
+    setRightTab('parameters');setPlanView('editor');navigate('plans');setModal(null);return true;
   }
   async function importFile(event) {
     const file=event.target.files?.[0];
@@ -310,43 +338,44 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
       if(new TextEncoder().encode(importText).length>262144) throw new Error('导入文件不能超过 256 KB。');
       const value = JSON.parse(importText);
       if(modal==='import-block') {addBlock(importBlock(value));setModal(null);setError('');setNotice('已导入功能块；参数仍需校验与保存。');return;}
+      if(modal==='import-run') {setRunSequence(runSnapshot(value));setRunSource({kind:'import',id:null,label:'从 JSON 导入的流程'});setRunPlan(null);setModal(null);setError('');navigate('run');return;}
       if(dirty && !window.confirm('导入方案会替换尚未保存的编排内容，是否继续？')) return;
       const editor = workflowToEditor(value);
       setDraft(editor); setBase({ id: null, version: null }); setDirty(true);
       setPlan(null);setSelectedBlock(editor.blocks[0]?._key || null); setSelected(null); setModal(null); setError('');
-      setRightTab('parameters');setActiveNav('editor');
+      setRightTab('parameters');setPlanView('editor');navigate('plans');
     } catch (failure) { setError('导入失败：' + failure.message); }
   }
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <a className="brand" href="/" aria-label="Pump Console 首页"><span className="brand-mark"><Workflow size={23} /></span><span>Pump Console<small>LABORATORY WORKSPACE</small></span></a>
+      <a className="brand" href="#run" onClick={event=>{event.preventDefault();navigate('run');}} aria-label="Pump Console 实验运行"><span className="brand-mark"><Workflow size={23} /></span><span>Pump Console<small>LABORATORY WORKSPACE</small></span></a>
       <div className="workspace-label">WORKSPACE</div>
-      <nav aria-label="主导航">
-        <button className={activeNav === 'editor' ? 'nav-active' : ''} onClick={() => {if(activeNav==='editor') editorRef.current?.scrollIntoView({behavior:'smooth'});else setActiveNav('editor');}}><LayoutDashboard size={18} /><span>实验控制台</span></button>
-        <button className={activeNav === 'experiments' ? 'nav-active' : ''} onClick={() => { setActiveNav('experiments'); setModal(null); }}><FolderOpen size={18} /><span>实验方案</span><em>{catalog.length}</em></button>
-        <button onClick={() => setModal('templates')}><Settings2 size={18} /><span>设备模板</span></button>
-        {user?.role==='admin' && <button onClick={()=>setModal('accounts')}><Users size={18}/><span>账号管理</span></button>}
-        <button onClick={() => {if(activeNav==='history') historyRef.current?.scrollIntoView({behavior:'smooth'});else setActiveNav('history');}}><History size={18} /><span>运行记录</span></button>
-      </nav>
+      <WorkspaceNav active={activeNav} onNavigate={navigate} count={catalog.length} user={user} onAccounts={()=>setModal('accounts')}/>
       <div className="sidebar-note"><ShieldCheck size={19} /><strong>{health?.hardware_execution_enabled?'自动化工作模式':'配置工作模式'}</strong><p>编辑、校验与保存方案<br />{health?.hardware_execution_enabled?'管理员可启动实验':'硬件执行尚未启用'}</p></div>
       <button className="connection-tile" onClick={() => setModal('connection')}><span className={'status-dot ' + (connected ? 'green' : 'red')} /><span>{connected ? '后端已连接' : '等待后端连接'}<small>Lab server</small></span><ChevronRight size={15} /></button>
       <div className="sidebar-footer"><span className="avatar">L</span><span>Lab workspace<small>本地实验环境</small></span><CircleHelp size={16} /></div>
     </aside>
     <main className="main-area">
       <header className="topbar">
-        <div><div className="breadcrumb">Workspace <ChevronRight size={12} /><span>{activeNav==='experiments'?'实验方案':'实验控制台'}</span></div><h1>{activeNav==='experiments'?'每一份方案，有序管理':'让实验流程，一目了然'}<span>{activeNav==='experiments'?'实验方案文件管理':'配置与监测工作台'}</span></h1></div>
-        <div className="top-actions">{user?.role==="admin" && <button className="outline-button campus-account-shortcut" onClick={()=>setModal("accounts")}><Users size={14}/>账号管理</button>}<span className="account-label"><ShieldCheck size={14} />{user?.username}<small>{user?.role === 'viewer' ? '只读' : '管理员'}</small></span><button className="subtle-button account-password-button" onClick={onChangePassword}>修改密码</button><button className="outline-button logout-button" onClick={onLogout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button><span className="mode-badge"><ShieldCheck size={13} />{health?.hardware_execution_enabled?'管理员执行模式':'硬件执行已锁定'}</span><button className="outline-button refresh-all-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress} aria-busy={refreshing || !!status.device_scan?.in_progress}><RefreshCw size={16} className={refreshing || status.device_scan?.in_progress ? 'refresh-spinning' : ''} />{refreshing || status.device_scan?.in_progress ? '正在刷新…' : user?.role === 'viewer' ? '更新状态显示' : '刷新全部状态'}</button><button className="subtle-button" onClick={() => setModal('connection')}><Link2 size={15} />连接详情</button></div>
+        <div><div className="breadcrumb">Workspace <ChevronRight size={12}/><span>{page.label}</span></div><h1>{page.title}<span>{page.subtitle}</span></h1></div>
+        <div className="top-actions">{user?.role==="admin" && <button className="outline-button campus-account-shortcut" onClick={()=>setModal("accounts")}><Users size={14}/>账号管理</button>}<span className="account-label"><ShieldCheck size={14} />{user?.username}<small>{user?.role === 'viewer' ? '只读' : '管理员'}</small></span><button className="subtle-button account-password-button" onClick={onChangePassword}>修改密码</button><button className="outline-button logout-button" onClick={onLogout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button><span className="mode-badge"><ShieldCheck size={13} />{health?.hardware_execution_enabled?'管理员执行模式':'硬件执行已锁定'}</span>{activeNav==='run' && <button className="outline-button refresh-all-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress} aria-busy={refreshing || !!status.device_scan?.in_progress}><RefreshCw size={16} className={refreshing || status.device_scan?.in_progress ? 'refresh-spinning' : ''} />{refreshing || status.device_scan?.in_progress ? '正在刷新…' : user?.role === 'viewer' ? '更新状态显示' : '刷新全部状态'}</button>}<button className="subtle-button" onClick={() => setModal('connection')}><Link2 size={15} />连接详情</button></div>
       </header>
+      <WorkspaceNav mobile active={activeNav} onNavigate={navigate} count={catalog.length} user={user} onAccounts={()=>setModal('accounts')}/>
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
-        <AutomationControl templates={actionTemplates} user={user} sequence={sequence} status={status} health={health} fresh={fresh} errors={errors} measurementCount={measurementCount} busy={busy} names={names} onPlan={setPlan} onRefresh={refresh} onStarted={value=>setSubmittedSequence(sequenceKey(value))}/>
-        <LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names} />
-        {activeNav==='experiments' ? <ExperimentManager items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setActiveNav('editor')} onChanged={fileChanged}/> : <>
-        <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
-
-        <section className="experiment-section" ref={editorRef}>
-          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.blocks.length} 块 · {steps.length} 动作</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setActiveNav('experiments')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
+        {activeNav!=='run' && (status.execution?.current?.can_stop || status.runtime?.controller_alive) && <button className="workspace-running-link" onClick={()=>navigate('run')}><span className={'status-dot '+(fresh?'green':'gray')}/>查看当前实验运行状态<ArrowUpRight size={14}/></button>}
+        {activeNav==='run' && <RunWorkspace sequence={runSequence} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
+        <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
+        {activeNav==='run' && <><LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names}/>
+          <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
+        </>}
+        {activeNav==='plans' && <section className="plans-workspace" aria-label="实验方案工作区">
+          <PlanWorkspaceTabs view={planView} onChange={setPlanView} dirty={dirty}/>
+          <div id="plan-workspace-panel" role="tabpanel" aria-label={planView==='files'?'方案文件管理':'实验流程编辑'}>
+          {planView==='files'?<ExperimentManager embedded items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onUse={loadRunExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setPlanView('editor')} onChanged={fileChanged}/>:
+        <section className="experiment-section">
+          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.blocks.length} 块 · {steps.length} 动作</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setPlanView('files')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
           <div className="experiment-form">
             <label className="scheme-select"><span>加载已有方案</span><div className="select-wrap"><select value={base.id || ''} onChange={event => loadExperiment(event.target.value)} aria-label="加载已有方案"><option value="" disabled>选择实验方案</option>{catalog.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select><ChevronDown size={15} /></div></label>
             <label><span>方案 ID <em>英文文件名</em></span><input value={draft.id} onChange={event => change({ id: event.target.value })} aria-label="方案 ID" spellCheck={false} /></label>
@@ -356,8 +385,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
             <BlockPalette elementRef={paletteRef} blocks={blockTemplates} templates={templates} measurementTemplates={measurementTemplates} activeBlock={activeBlock} shortNames={shortNames}
               canManage={user?.role==='admin'} onManage={()=>openBlockLibrary()} onEditTemplate={id=>openBlockLibrary(null,id)}
               mode={paletteMode} onMode={setPaletteMode} onAddBlock={addBlock} onAddAction={addStep} onNew={newBlock}
-              onImport={()=>{setImportText('');setModal('import-block');}} onTemplates={()=>setModal('templates')}/>
-            <BlockCanvas blocks={draft.blocks} selected={selectedBlock} runningIndex={runningIndex} templates={actionTemplates} shortNames={shortNames}
+              onImport={()=>{setImportText('');setModal('import-block');}}/>
+            <BlockCanvas blocks={draft.blocks} selected={selectedBlock} runningIndex={-1} templates={actionTemplates} shortNames={shortNames}
               onSelect={selectBlock} onMove={reorderBlocks} onCopy={copyBlock} onDelete={deleteBlock} onNew={newBlock}/>
             <aside className="inspector" ref={inspectorRef}>
               <div className="inspector-tabs" role="tablist" aria-label="流程编辑侧栏">
@@ -369,8 +398,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
                 {rightTab==='parameters' ? <BlockInspector block={activeBlock} blockIndex={blockIndex} selectedStep={selectedStep} templates={actionTemplates} names={names} shortNames={shortNames}
                   canManage={user?.role==='admin'} onSaveTemplate={()=>openBlockLibrary(activeBlock)}
                   onBlockChange={updateBlock} onSelectAction={selectAction} onUpdateAction={values=>updateStep(selectedStep._key,values)} onMoveAction={reorder} onCopyAction={copyAction} onDeleteAction={deleteAction}
-                  onAddAction={showActions} onExport={downloadBlock} onTemplates={()=>setModal('templates')}
-                  cellBudget={cellBudget} offset={blockOffset} runningIndex={runningIndex}/> :
+                  onAddAction={showActions} onExport={downloadBlock}
+                  cellBudget={cellBudget} offset={blockOffset} runningIndex={-1}/> :
                  rightTab==='json' ? <div className="json-panel"><div className="json-caption"><span>schema_version: 3</span><button onClick={async () => { try { await navigator.clipboard.writeText(jsonText); setNotice('JSON 已复制。'); } catch { setError('复制失败，请使用下载 JSON。'); } }} aria-label="复制 JSON"><Clipboard size={14} /></button></div><pre>{jsonText}</pre></div> : <div className="workflow-summary">
                   <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前实验方案</h3><p>{draft.blocks.length} 个功能块 · {steps.length} 个动作{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
                   <div className="summary-metrics"><div><span>目标注入</span><strong>{totals.inject.toLocaleString()}<small>mL</small></strong></div><div><span>标称抽出</span><strong>{totals.withdraw.toLocaleString()}<small>mL</small></strong></div></div>
@@ -383,20 +412,23 @@ export default function App({ user, onLogout, onChangePassword, loggingOut }) {
               <div className="inspector-footer"><LockKeyhole size={13} /><span>{health?.hardware_execution_enabled?'运行使用已确认快照；编辑不会改变当前任务':'当前为配置编排，设备动作未启用'}</span></div>
             </aside>
           </div>
-          <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="subtle-button" onClick={()=>download()}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
+          <footer className="builder-footer"><span><span className={'status-dot ' + (dirty ? 'amber' : 'green')} />{dirty ? '有未保存的修改' : '方案已加载'}<span className="footer-path">config/sequences/</span></span><div><button className="outline-button" onClick={useDesignForRun} disabled={!!busy || !!errors.length}><ArrowUpRight size={15}/>载入运行</button><button className="subtle-button" onClick={()=>download()}><Download size={15} />下载 JSON</button><button className="outline-button" onClick={preview} disabled={!!busy || !connected || !steps.length}><Workflow size={15} />{busy === 'preview' ? '预演中…' : '校验与预演'}</button><button className="primary-button" onClick={save} disabled={!!busy || !connected || !steps.length || user?.role === 'viewer'} title={user?.role === 'viewer' ? '当前账户为只读权限' : undefined}><Save size={15} />{busy === 'save' ? '保存中…' : '保存方案'}</button></div></footer>
         </section>
-        <section className="history-section" ref={historyRef}><div className="section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>最近运行记录</h2></div><span className="history-note">读取原有实验日志 · 不会启动设备</span></div><div className="history-table"><div className="history-row history-table-head"><span>实验方案</span><span>开始时间</span><span>完成步骤</span><span>结果</span></div>{runs.slice(0, 5).map(run => <button className="history-row" key={run.id} onClick={() => setModal({ run })}><span><FileJson size={16} />{run.sequence_id}</span><span>{timeText(run.started_at)}</span><span>{run.completed_steps} 步</span><span className={'run-tag ' + run.state}>{run.state === 'completed' ? '已完成' : run.state === 'aborted' ? '已中止' : '待确认'}<ChevronRight size={13} /></span></button>)}{!runs.length && <div className="empty-history">暂无可读取的历史运行记录</div>}</div></section>
-        </>}
-        <footer className="page-footer"><span>Pump Console <span>·</span> 配置工作台</span><span>连接{connected ? '正常' : '待恢复'} {latency !== null && ('· ' + latency + ' ms')} <span>·</span> JSON 使用英文</span></footer>
+          }
+          </div>
+        </section>}
+        {activeNav==='history' &&
+        <section className="history-section"><div className="section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>最近运行记录</h2></div><span className="history-note">读取原有实验日志 · 不会启动设备</span></div><div className="history-table"><div className="history-row history-table-head"><span>实验方案</span><span>开始时间</span><span>完成步骤</span><span>结果</span></div>{runs.slice(0, 5).map(run => <button className="history-row" key={run.id} onClick={() => setModal({ run })}><span><FileJson size={16} />{run.sequence_id}</span><span>{timeText(run.started_at)}</span><span>{run.completed_steps} 步</span><span className={'run-tag ' + run.state}>{run.state === 'completed' ? '已完成' : run.state === 'aborted' ? '已中止' : '待确认'}<ChevronRight size={13} /></span></button>)}{!runs.length && <div className="empty-history">暂无可读取的历史运行记录</div>}</div></section>
+        }
+        <footer className="page-footer"><span>Pump Console <span>·</span> {page.label}</span><span>连接{connected ? '正常' : '待恢复'} {latency !== null && ('· ' + latency + ' ms')} <span>·</span> JSON 使用英文</span></footer>
       </div>
     </main>
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
     {modal==='block-library' && <BlockLibraryManager user={user} seed={libraryOpen.seed} initialId={libraryOpen.id} templates={actionTemplates} names={names} shortNames={shortNames} defaultVolume={health?.ui.default_volume_ml ?? 1} onChanged={library=>setBlockTemplates(library.blocks)} onClose={()=>setModal(null)}/>}
-    {modal && modal!=='block-library' && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : modal === 'templates' ? '设备模板' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
-      {['import','import-block'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
+    {modal && modal!=='block-library' && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-run' ? '导入运行流程' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
+      {['import','import-block','import-run'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':modal==='import-run'?'载入本次待运行的完整流程，不会替换实验设计草稿。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':modal==='import-run'?'载入运行流程':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :
-        modal === 'templates' ? <div className="template-grid">{Object.entries(actionTemplates).map(([id, template]) => <article key={id}><h3>{names[id] || id}</h3><small>{id==='electrochemical_station' ? 'action_templates/cyclic_voltammetry.json' : id+'.json'}</small><pre>{JSON.stringify(template, null, 2)}</pre></article>)}</div> :
         <><div className="modal-description">{modal.run?.sequence_id} · {modal.run?.completed_steps} 步完成</div><div className="run-events">{modal.run?.events.filter(item => ['step_started', 'step_completed', 'sequence_aborted', 'sequence_completed'].includes(item.event)).map((item, index) => <div key={index}><span className="status-dot gray" /><span>{timeText(item.time)}</span><strong>{item.event === 'step_started' ? item.step.description : item.event === 'step_completed' ? item.id + ' 已完成' : item.message || item.event}</strong></div>)}</div></>}
     </section></div>}
   </div>;

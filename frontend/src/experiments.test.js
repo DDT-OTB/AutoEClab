@@ -53,6 +53,8 @@ test('file list and read-only detail provide inspection without exposing destruc
   assert.doesNotMatch(html,/删除方案|重命名|复制方案/);
   const admin=render(ExperimentFileDetails,{item:items[0],content:'{}',tab:'info',user:{role:'admin'},setTab:()=>{}});
   assert.match(admin,/删除方案/);assert.match(admin,/重命名/);assert.match(admin,/复制方案/);
+  const ready=render(ExperimentFileDetails,{item:items[0],content:'{}',tab:'info',user:{role:'viewer'},setTab:()=>{},onUse:()=>{}});
+  assert.match(ready,/载入实验运行/);assert.doesNotMatch(ready,/确认启动设备/);
 });
 test('file manager exposes search, filter and empty-state controls as a full workspace',()=>{
   const html=render(ExperimentManager,{items:[],user:{role:'viewer'},activeId:null,onReload:async()=>[],onOpen:()=>{},onNew:()=>{},onImport:()=>{},onBack:()=>{}});

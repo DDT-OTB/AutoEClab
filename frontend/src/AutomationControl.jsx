@@ -34,7 +34,7 @@ export function ExecutionConfirmation({prepared,currentSequence,pending,error,on
   </section></div>;
 }
 
-export default function AutomationControl({user,sequence,status,health,fresh,errors,measurementCount,busy,names,onPlan,onRefresh,onStarted,templates={}}) {
+export default function AutomationControl({user,sequence,status,health,fresh,errors,measurementCount,busy,names,onPlan,onRefresh,onStarted,templates={},visible=true,hasSequence=true}) {
   const [prepared,setPrepared]=useState(null),[pending,setPending]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [calibration,setCalibration]=useState(null);
   const [cellPreparation,setCellPreparation]=useState(null);
@@ -43,7 +43,7 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
   currentSequence.current=sequence;
   const current=status.execution?.current;
   const enabled=status.execution?.enabled ?? health?.hardware_execution_enabled;
-  const availability=automationAvailability({user,enabled,fresh,current,runtime:status.runtime,errors,measurementCount,busy:busy || !!pending});
+  const availability=automationAvailability({user,enabled,fresh,current,runtime:status.runtime,errors:hasSequence?errors:['请先加载或导入一个实验流程。'],measurementCount,busy:busy || !!pending});
   useEffect(()=>{if(current?.run_id) setNotice('');},[current?.run_id]);
   useEffect(()=>{
     if(!prepared) return;
@@ -53,16 +53,20 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
     poll();const timer=setInterval(poll,1000);return()=>{disposed=true;clearInterval(timer);};
   },[prepared?.run_id]);
   async function prepare() {
-    if(pendingRef.current || !availability.allowed) return;
+    if(pendingRef.current || !hasSequence || !availability.allowed) return;
     pendingRef.current=true;setPending('prepare');setError('');setNotice('');
-    try {const result=await api.prepareExecution(sequence);setPrepared(result);setCalibration(result.calibration);setCellPreparation(result.cell_preparation);onPlan(result.preview);}
+    try {
+      const result=await api.prepareExecution(sequence);
+      if(!preparedIsCurrent(result,currentSequence.current)){setError('已载入的流程发生变化，请重新准备本次运行。');return;}
+      setPrepared(result);setCalibration(result.calibration);setCellPreparation(result.cell_preparation);onPlan(result.preview);
+    }
     catch(failure) {setError(failure.message);}
     finally {pendingRef.current=false;setPending('');}
   }
   async function start() {
     if(pendingRef.current || !availability.allowed || !calibrationAllowsStart(calibration) || !cellAllowsStart(cellPreparation) || !preparedIsCurrent(prepared,currentSequence.current) || user?.role!=='admin') return;
     pendingRef.current=true;setPending('start');setError('');
-    try {await api.startExecution(prepared.run_id,prepared.version);onStarted?.(prepared.sequence);setPrepared(null);setNotice('启动请求已接受，正在等待控制器预检与运行反馈。');await onRefresh();}
+    try {await api.startExecution(prepared.run_id,prepared.version);onStarted?.(prepared.sequence,prepared.run_id);setPrepared(null);setNotice('启动请求已接受，正在等待控制器预检与运行反馈。');await onRefresh();}
     catch(failure) {setError(failure.message);await onRefresh();}
     finally {pendingRef.current=false;setPending('');}
   }
@@ -102,16 +106,17 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
   const volumes=cellVolumes(sequence,undefined,templates);
   const currentCellReady=active && current?.sequence_id===sequence.id && current?.cell_preparation_passed;
   const visibleCellPreparation=prepared?(cellPreparation?.state || 'required'):currentCellReady?'passed':'required';
-  return <section className={'automation-control '+(active?'automation-active':'')} aria-label="自动化运行控制">
-    <div className="automation-control-main"><span className="automation-shield"><ShieldCheck size={20}/></span><div><strong>{displayTitle}</strong><p>{active?current.sequence_id+' · 操作人 '+current.started_by:'当前编排：'+sequence.id}</p></div><div className="automation-control-buttons">
-      {user?.role==='admin' ? <>{current?.can_stop && <button className="automation-stop" onClick={stop} disabled={!!pending || current.stop_requested}><Square size={14}/>{pending==='stop' || current.stop_requested?'等待停止反馈…':'停止当前实验'}</button>}<button className="primary-button" onClick={prepare} disabled={!availability.allowed} title={availability.reason}>{pending==='prepare'?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>} {pending==='prepare'?'后端校验中…':'运行当前编排'}</button></> : <span className="automation-viewer"><LockKeyhole size={13}/>只读监测</span>}
+  return <>{visible && <section className={'automation-control '+(active?'automation-active':'')} aria-label="自动化运行控制">
+    <div className="automation-control-main"><span className="automation-shield"><ShieldCheck size={20}/></span><div><strong>{displayTitle}</strong><p>{active?current.sequence_id+' · 操作人 '+current.started_by:hasSequence?'已载入流程：'+sequence.id:'尚未载入实验流程'}</p></div><div className="automation-control-buttons">
+      {user?.role==='admin' ? <>{current?.can_stop && <button className="automation-stop" onClick={stop} disabled={!!pending || current.stop_requested}><Square size={14}/>{pending==='stop' || current.stop_requested?'等待停止反馈…':'停止当前实验'}</button>}<button className="primary-button" onClick={prepare} disabled={!availability.allowed} title={availability.reason}>{pending==='prepare'?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>} {pending==='prepare'?'后端校验中…':'运行已载入流程'}</button></> : <span className="automation-viewer"><LockKeyhole size={13}/>只读监测</span>}
     </div></div>
     <p className="automation-control-note">{availability.reason}</p>
-    <div className="calibration-overview" aria-label="电解池容量与启动前准备"><span>容量上限 {volumes.capacity_ml} mL</span><small>本方案预计峰值 {volumes.peak_volume_ml} mL · {currentCellReady?'运行中任务空池准备':'启动前排空'}：{cellPreparationLabels[visibleCellPreparation]} · 需人工确认空池</small></div>
-    {flattenSequence(sequence).steps.some(step=>step.device==='syringe_c') && <div className="calibration-overview" aria-label="注射泵实验前校验状态"><span className={visibleCalibration==='passed'?'is-passed':''}>本次回零：{calibrationLabels[visibleCalibration]}</span><small>每次实验前必需；点击“运行当前编排”完成校验。{status.execution?.syringe_calibration?.last_homing?.initialized_at && ' 最近回零：'+new Date(status.execution.syringe_calibration.last_homing.initialized_at).toLocaleString('zh-CN')}</small></div>}
+    {hasSequence && <div className="calibration-overview" aria-label="电解池容量与启动前准备"><span>容量上限 {volumes.capacity_ml} mL</span><small>本方案预计峰值 {volumes.peak_volume_ml} mL · {currentCellReady?'运行中任务空池准备':'启动前排空'}：{cellPreparationLabels[visibleCellPreparation]} · 需人工确认空池</small></div>}
+    {flattenSequence(sequence).steps.some(step=>step.device==='syringe_c') && <div className="calibration-overview" aria-label="注射泵实验前校验状态"><span className={visibleCalibration==='passed'?'is-passed':''}>本次回零：{calibrationLabels[visibleCalibration]}</span><small>每次实验前必需；点击“运行已载入流程”完成校验。{status.execution?.syringe_calibration?.last_homing?.initialized_at && ' 最近回零：'+new Date(status.execution.syringe_calibration.last_homing.initialized_at).toLocaleString('zh-CN')}</small></div>}
     {current?.message && !active && fresh && <p className={'automation-result '+(current.state==='failed'?'is-failed':'')} role="status">{current.state==='failed'?<AlertCircle size={14}/>:<CheckCircle2 size={14}/>}<span>{current.message}</span></p>}
     {current?.cleanup_failed && <p className="automation-error" role="alert">设备停止回读失败，请现场确认。界面不会将其显示为已安全停止。</p>}
     {notice && <p className="automation-notice" role="status">{notice}</p>}{error && !prepared && <p className="automation-error" role="alert">{error}</p>}
+  </section>}
     {prepared && user?.role==='admin' && <ExecutionConfirmation prepared={prepared} currentSequence={sequence} pending={pending==='start'} error={error} onStart={start} onClose={()=>{setPrepared(null);setCalibration(null);setCellPreparation(null);setError('');}} names={names} blockedReason={availability.allowed?null:availability.reason} calibration={calibration} onCalibrate={calibrate} calibrationBusy={pending==='calibrate'} onStop={stop} canStop={current?.operation==='calibrate_syringe' && current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} cellPreparation={cellPreparation} onDrain={drain} onEmptyConfirm={confirmEmpty} cellBusy={pending==='drain' || pending==='empty'} canStopDrain={current?.operation==='drain_cell' && current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} fresh={fresh}/>}
-  </section>;
+  </>;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDown, ArrowRight, CircleHelp, LockKeyhole, MousePointer2, Settings2 } from 'lucide-react';
+import { ArrowDown, ArrowRight, CircleHelp, LockKeyhole, MousePointer2 } from 'lucide-react';
 import { ActionIcon } from './FlowStep.jsx';
 import { cvDuration, cvErrors, cvWaveform, isMeasurement } from './cv.js';
 import { fluidLabels, formatDuration, operationLabels } from './model.js';
@@ -27,7 +27,7 @@ function VoltageProgram({ parameters }) {
   </figure>;
 }
 
-export default function ActionInspector({ step, template, index, title, onChange, onOpenTemplates }) {
+export default function ActionInspector({ step, template, index, title, onChange }) {
   if (!step || !template) return <div className="inspector-empty"><MousePointer2 size={29} /><h3>选择一个动作</h3><p>点击流程节点，在这里编辑参数。</p></div>;
   const measurement = isMeasurement(step), config = template.device, p = step.parameters || {};
   const updateParameter = (key,value) => onChange({ parameters: { ...p, [key]: value } });
@@ -66,11 +66,10 @@ export default function ActionInspector({ step, template, index, title, onChange
       </> : <>
         <NumberField label={step.operation === 'withdraw' ? '抽出体积' : '注入体积'} value={step.volume_ml} onChange={value => onChange({volume_ml:value})} unit="mL" min="0.001" max={config.capacity_ml} step="0.1" />
         <div className="parameter-flow-direction"><span>{step.operation === 'withdraw' ? '电解池' : fluidLabels[step.fluid] || step.fluid}</span><ArrowRight size={18} /><strong>{step.operation === 'withdraw' ? '所选废液流路' : '电解池'}</strong></div>
-        {config.kind === 'syringe' && <p className="parameter-hint">模板动作会先从储液侧吸入，再向电解池注入所填体积；容量为 {config.capacity_ml} mL。</p>}
-        {template.action.type === 'drain' && <p className="parameter-hint">按模板增加 {Math.round(template.action.extra_time_fraction*100)}% 排液时间；抽液前需先选择废液流路。</p>}
+        {config.kind === 'syringe' && <p className="parameter-hint">注射泵会先从储液侧吸入，再向电解池注入所填体积；容量为 {config.capacity_ml} mL。</p>}
+        {template.action.type === 'drain' && <p className="parameter-hint">按系统设置增加 {Math.round(template.action.extra_time_fraction*100)}% 排液时间；抽液前需先选择废液流路。</p>}
       </>}
       </section>
-      <section className="parameter-group template-parameter-summary"><div className="parameter-section-heading">继承的模板参数{onOpenTemplates && <button onClick={onOpenTemplates} type="button"><Settings2 size={13} />查看</button>}</div><dl><dt>操作</dt><dd>{operationLabels[step.operation]}</dd><dt>液体</dt><dd>{fluidLabels[step.fluid] || '—'}</dd><dt>默认速度</dt><dd>{config.rpm ? config.rpm+' rpm' : config.speed_steps_s ? config.speed_steps_s+' 步/秒' : '—'}</dd><dt>流量估算</dt><dd>{config.calibration?.flow_ml_min ? config.calibration.flow_ml_min+' mL/min' : '—'}</dd><dt>设备地址</dt><dd>{config.address}</dd></dl><p className="parameter-hint">速度、标定及通讯设置由对应 JSON 模板统一管理。</p></section>
     </>}
   </div>;
 }

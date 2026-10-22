@@ -78,7 +78,7 @@ test('the workflow canvas selects blocks while the inspector owns block and acti
   assert.match(detail,/aria-label="注入体积"/);
 });
 test('the application renders an empty block editor without assuming top-level actions exist',()=>{
-  const html=renderToStaticMarkup(React.createElement(App,{user:{username:'synthetic_viewer',role:'viewer'}}));
+  const html=renderToStaticMarkup(React.createElement(App,{user:{username:'synthetic_viewer',role:'viewer'},initialPage:'plans',initialPlanView:'editor'}));
   assert.match(html,/从第一个功能块开始/);
   assert.match(html,/功能块 \/ 动作/);
   assert.doesNotMatch(html,/确认启动设备/);
@@ -101,7 +101,7 @@ test('the template editor shows the seeded action list and action buttons cannot
   const seed={schema_version:1,kind:'function_block',id:'test_block',description:'Synthetic template',steps:[{device:'peristaltic_1',operation:'inject',volume_ml:10,fluid:'water'}]};
   const html=renderToStaticMarkup(React.createElement(BlockLibraryManager,{user:{role:'admin'},seed,templates:{peristaltic_1:pump},names:{},shortNames:{}}));
   assert.match(html,/aria-label="模板 ID"/);assert.match(html,/value="test_block"/);assert.match(html,/保存模板/);
-  assert.match(html,/编辑第 1 步参数/);assert.doesNotMatch(html,/运行当前编排|确认启动设备/);
+  assert.match(html,/编辑第 1 步参数/);assert.doesNotMatch(html,/运行已载入流程|确认启动设备/);
   assert.match(html,/<form class="library-template-form" noValidate=""/);
   const action=renderToStaticMarkup(React.createElement(FlowStep,{step:seed.steps[0],template:pump,index:0,total:1}));
   assert.ok([...action.matchAll(/<button\b[^>]*>/g)].every(([tag])=>tag.includes('type="button"')));

@@ -10,4 +10,5 @@ import './apparatus.css';
 import './accounts.css';
 import './experiment-files.css';
 import './automation.css';
+import './workspace.css';
 createRoot(document.getElementById('root')).render(<AuthGate />);
