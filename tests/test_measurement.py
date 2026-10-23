@@ -9,6 +9,7 @@ import test_api
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from pump_console.measurement import measurement_templates, validate_cv
 from pump_console.repository import ApiError
+from pump_console.preflight import default_preflight
 
 
 class MeasurementApiTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class MeasurementApiTests(unittest.TestCase):
                 "parameters":copy.deepcopy(template["action"]["default_parameters"])}
 
     def cv_sequence(self):
-        return {"schema_version":2,"id":"cv_only_draft","description":"Cyclic voltammetry planning draft",
+        return {"preflight":default_preflight(),"schema_version":2,"id":"cv_only_draft","description":"Cyclic voltammetry planning draft",
                 "steps":[self.measurement()]}
 
     def test_template_is_planning_only_and_not_added_to_hardware_inventory(self):

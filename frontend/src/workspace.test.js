@@ -27,20 +27,20 @@ test('workspace links resolve to execution, combined plans or history with a saf
 test('loaded execution flow is independent of later edits to a design or imported file',()=>{
   const design=structuredClone(sequence),loaded=runSnapshot(design);
   assert.deepEqual(loaded,sequence);
-  design.blocks[0].steps[0].volume_ml=25;
+  design.blocks[1].steps[0].volume_ml=25;
   design.blocks.reverse();
-  assert.equal(loaded.blocks[0].steps[0].volume_ml,10);
+  assert.equal(loaded.blocks[1].steps[0].volume_ml,10);
   const second=runSnapshot(loaded);second.blocks[0].description='Edited separately';
   assert.notEqual(second.blocks[0].description,loaded.blocks[0].description);
   const old=runSnapshot(legacy);
-  assert.deepEqual(old.blocks[0].steps,legacy.steps);
+  assert.deepEqual(old.blocks[1].steps,legacy.steps);
   assert.equal(old.schema_version,3);
   for(const value of [null,[],{...sequence,id:{}},{...sequence,description:{}},{...sequence,schema_version:99}])assert.throws(()=>runSnapshot(value));
 });
 test('loaded run snapshots retain complete capacity, route and measurement validation',()=>{
   const loaded=runSnapshot(sequence);
   assert.deepEqual(draftErrors(loaded,templates),[]);
-  loaded.blocks[0].steps[0].volume_ml=41;
+  loaded.blocks[1].steps[0].volume_ml=41;
   assert.match(draftErrors(loaded,templates).join(' '),/超过 40/);
   const drain=runSnapshot({...sequence,blocks:[{id:'no_route',description:'Missing waste route',steps:[{device:'peristaltic_2',operation:'withdraw',fluid:'waste_liquid',volume_ml:10}]}]});
   assert.match(draftErrors(drain,templates).join(' '),/选择废液流路/);
@@ -72,7 +72,7 @@ test('history is a separate page and both mobile and desktop provide the two mai
 test('loaded process preview is read-only while retaining every action and current-step feedback',()=>{
   const html=render(RunWorkspace,{sequence,source:{label:'Synthetic loaded snapshot'},items:[],templates,shortNames:{},runningIndex:3});
   assert.equal(flattenSequence(sequence).steps.length,9);
-  assert.match(html,/4 个功能块 · 9 个动作/);assert.match(html,/只读/);assert.match(html,/执行中/);
+  assert.match(html,/5 个功能块 · 9 个动作/);assert.match(html,/只读/);assert.match(html,/执行中/);
   assert.doesNotMatch(html,/<(input|textarea)\b|step-actions|编辑第/);
   assert.match(html,/使用载入时的流程副本/);
 });

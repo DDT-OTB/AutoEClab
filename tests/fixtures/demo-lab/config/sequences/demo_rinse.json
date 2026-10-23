@@ -57,5 +57,25 @@
       "volume_ml": 1.0,
       "fluid": "waste_liquid"
     }
-  ]
+  ],
+  "preflight": {
+    "type": "preflight",
+    "id": "experiment_preparation",
+    "description": "Home the syringe when used, drain the cell and confirm it is empty",
+    "steps": [
+      {
+        "device": "syringe_c",
+        "operation": "home_if_used"
+      },
+      {
+        "device": "cell",
+        "operation": "drain_to_waste",
+        "route": "waste_1"
+      },
+      {
+        "device": "cell",
+        "operation": "confirm_empty"
+      }
+    ]
+  }
 }

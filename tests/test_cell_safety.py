@@ -9,6 +9,7 @@ import test_execution as execution_tests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from pump_console.cell_safety import analyze_volumes, drain_sequence, load_policy, require_safe_volumes, CellSafetyError
 from pump_console.repository import ApiError
+from pump_console.preflight import default_preflight
 
 
 def action(volume, operation='inject', device='peristaltic_1', fluid='water'):
@@ -16,7 +17,7 @@ def action(volume, operation='inject', device='peristaltic_1', fluid='water'):
 
 
 def sequence(steps):
-    return {'schema_version': 2, 'id': 'synthetic_cell_policy', 'description': 'Synthetic cell safety verification', 'steps': steps}
+    return {'preflight':default_preflight(),'schema_version': 2, 'id': 'synthetic_cell_policy', 'description': 'Synthetic cell safety verification', 'steps': steps}
 
 
 class CellVolumeTests(unittest.TestCase):

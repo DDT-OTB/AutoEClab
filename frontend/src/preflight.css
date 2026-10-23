@@ -1,0 +1,27 @@
+.preflight-fixed-note {display:flex;align-items:flex-start;gap:6px;color:#83976f;font-size:11px;line-height:1.8;padding:12px;border:1px solid #dde9d1;background:#f3f8ed;border-radius:6px}
+.preflight-fixed-note svg {flex-shrink:0;margin-top:3px}
+.preflight-editor>ol {padding-left:21px;color:#6a8755;margin-top:18px}
+.preflight-editor>ol>li {padding:0 0 18px 6px;font-size:12px}
+.preflight-editor>ol>li strong {font-size:12px;font-weight:500}
+.preflight-editor p {font-size:10px;color:#9aa88c;line-height:1.9;margin:8px 0 0}
+.preflight-progress {border:1px solid #dce8d1;border-radius:8px;background:#fbfdf8;padding:16px 17px;margin:16px 0}
+.preflight-progress-heading {display:flex;align-items:center;gap:7px;color:#6a8b52}
+.preflight-progress-heading strong {font-size:12px;font-weight:600}
+.preflight-progress-heading code {font-size:9px;margin-left:auto;color:#a5b295;overflow-wrap:anywhere;min-width:0}
+.preflight-progress>ol {list-style:none;margin:12px 0 0;padding:0}
+.preflight-stage {display:flex;align-items:flex-start;gap:9px;padding:13px 0;border-top:1px solid #e9f0e1}
+.preflight-stage>span {display:grid;place-items:center;width:23px;height:23px;border:1px solid #dbe5d2;border-radius:50%;font-size:10px;color:#a4b295;flex-shrink:0}
+.preflight-stage>div {flex:1;min-width:0}
+.preflight-stage strong {font-size:12px;color:#768f62;font-weight:500}
+.preflight-stage p {font-size:10px;color:#a2af95;line-height:1.8;margin:4px 0 0}
+.preflight-stage>small {font-size:10px;color:#a8b49c;white-space:nowrap;padding-top:3px}
+.preflight-stage.state-passed>small,.preflight-stage.state-passed>span {color:#6e9b55}
+.preflight-stage.state-running>small {color:#46876d}
+.preflight-stage.state-failed>small {color:#b98164}
+.preflight-acknowledgement {display:flex;align-items:flex-start;gap:8px;padding:13px 12px;border:1px solid #e7dfc7;background:#fcf8ed;border-radius:5px;font-size:11px;line-height:1.9;color:#9c8a5f}
+.preflight-acknowledgement input {margin:4px 0 0;accent-color:#6d9653;flex-shrink:0}
+.preflight-main-preview {border:1px solid #e5ecdd;border-radius:6px;padding:12px 14px;margin-top:14px;font-size:11px;color:#95a486}
+.preflight-main-preview summary {cursor:pointer}
+.run-preview-preflight {grid-column:1/-1;list-style:none;min-width:0}
+.run-preview-preflight .preflight-progress {margin:0}
+@media(max-width:640px){.preflight-progress{padding:14px 11px}.preflight-progress-heading{flex-wrap:wrap}.preflight-progress-heading code{flex-basis:100%;margin-left:25px}.preflight-stage{gap:7px}.preflight-stage strong{font-size:11px}.preflight-stage>small{font-size:9px}.automation-dialog-actions{flex-wrap:wrap}}

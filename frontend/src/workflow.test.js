@@ -15,16 +15,16 @@ const deviceTemplates=Object.fromEntries(['peristaltic_1','peristaltic_2','peris
 
 test('two-level roundtrip retains every block and action while stripping editor identities',()=>{
   const draft=workflowToEditor(experiment);
-  assert.equal(draft.blocks.length,4);
+  assert.equal(draft.blocks.length,5);
   assert.deepEqual(workflowSequence(draft),experiment);
-  assert.equal(new Set(draft.blocks.flatMap(block=>[block._key,...block.steps.map(step=>step._key)])).size,13);
+  assert.equal(new Set(draft.blocks.flatMap(block=>[block._key,...block.steps.map(step=>step._key)])).size,17);
   assert.doesNotMatch(JSON.stringify(workflowSequence(draft)),/_key/);
   assert.deepEqual(draftErrors(draft,deviceTemplates),[]);
 });
 test('legacy files are wrapped without changing their ordered action parameters or original source',()=>{
   const before=structuredClone(legacy),draft=workflowToEditor(legacy);
-  assert.equal(draft.blocks.length,1);
-  assert.deepEqual(workflowSequence(draft).blocks[0].steps,legacy.steps);
+  assert.equal(draft.blocks.length,2);
+  assert.deepEqual(workflowSequence(draft).blocks[1].steps,legacy.steps);
   assert.deepEqual(legacy,before);
 });
 test('import, copy, export and reorder keep block instances independent with unique instance IDs',()=>{
@@ -65,13 +65,13 @@ test('flattened identities and live indices map the same physical step across bl
   const flat=flattenSequence(experiment);
   assert.equal(flat.steps.length,9);
   assert.equal(flat.steps[3].device,'syringe_c');
-  assert.equal(flat.steps[3].id,'block_002_step_001');
+  assert.equal(flat.steps[3].id,'block_003_step_001');
   assert.equal(new Set(flat.steps.map(step=>step.id)).size,9);
   const runtime={state:'running',sequence_id:experiment.id,active_step:{...flat.steps[3],index:4,state:'executing'}};
   assert.equal(liveStepIndex(flat,runtime,false,true),3);
   assert.equal(liveStepIndex(flat,runtime,true,true),-1);
   const prepared={sequence:structuredClone(experiment)};
-  const edited=structuredClone(experiment);edited.blocks[0].steps[0].volume_ml=11;
+  const edited=structuredClone(experiment);edited.blocks[1].steps[0].volume_ml=11;
   assert.equal(preparedIsCurrent(prepared,edited),false);
 });
 test('measurement parameters inside a block roundtrip independently and are still validated',()=>{
@@ -81,7 +81,7 @@ test('measurement parameters inside a block roundtrip independently and are stil
   const draft=workflowToEditor({...experiment,blocks:[block]});
   const copy=instantiateBlock(block,draft.blocks);
   copy.steps[0].parameters.cycles=3;
-  assert.equal(draft.blocks[0].steps[0].parameters.cycles,1);
-  draft.blocks[0].steps[0].parameters.scan_rate_v_s=0;
+  assert.equal(draft.blocks[1].steps[0].parameters.cycles,1);
+  draft.blocks[1].steps[0].parameters.scan_rate_v_s=0;
   assert.match(draftErrors(draft,{...deviceTemplates,electrochemical_station:cv}).join(' '),/扫描速率/);
 });

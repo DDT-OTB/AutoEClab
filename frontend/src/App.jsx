@@ -15,6 +15,7 @@ import BlockLibraryManager from './BlockLibraryManager.jsx';
 import WorkspaceNav,{PlanWorkspaceTabs} from './WorkspaceNav.jsx';
 import RunWorkspace from './RunWorkspace.jsx';
 import {emptyRunSequence,runSnapshot,workspacePage,workspacePages} from './workspace.js';
+import {isPreflight} from './preflight.js';
 import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
@@ -25,7 +26,7 @@ import { sequenceKey } from './automation.js';
 import { cellVolumes } from './cellSafety.js';
 import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
-const emptyDraft = () => ({
+const emptyDraft = () => workflowToEditor({
   schema_version: 3, id: 'new_experiment', description: 'New block experiment',
   notes: ['Review this experiment before hardware execution.'], blocks: [],
 });
@@ -62,6 +63,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const [runSequence,setRunSequence]=useState(null);
   const [runSource,setRunSource]=useState(null);
   const [runPlan,setRunPlan]=useState(null);
+  const [runPreparation,setRunPreparation]=useState(null);
   const [submittedRun,setSubmittedRun]=useState(null);
   const [connected, setConnected] = useState(false);
   const [latency, setLatency] = useState(null);
@@ -86,7 +88,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const flatRun=useMemo(()=>flattenSequence(executionSequence),[executionSequence]);
   const runErrors=useMemo(()=>runSequence?draftErrors(runSequence,actionTemplates):['请先加载或导入一个实验流程。'],[runSequence,actionTemplates]);
   const runMeasurementCount=flatRun.steps.filter(isMeasurement).length;
-  const steps=useMemo(()=>draft.blocks.flatMap(block=>block.steps),[draft.blocks]);
+  const steps=useMemo(()=>draft.blocks.filter(block=>!isPreflight(block)).flatMap(block=>block.steps),[draft.blocks]);
   const cellBudget=useMemo(()=>cellVolumes(sequence,undefined,actionTemplates),[sequence,actionTemplates]);
   const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
   const jsonText = useMemo(() => JSON.stringify(sequence, null, 2), [sequence]);
@@ -95,7 +97,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const activeBlock=draft.blocks.find(block=>block._key===selectedBlock);
   const selectedStep = activeBlock?.steps.find(step => step._key === selected);
   const blockIndex=draft.blocks.findIndex(block=>block._key===selectedBlock);
-  const blockOffset=draft.blocks.slice(0,Math.max(0,blockIndex)).reduce((sum,block)=>sum+block.steps.length,0);
+  const blockOffset=draft.blocks.slice(0,Math.max(0,blockIndex)).filter(block=>!isPreflight(block)).reduce((sum,block)=>sum+block.steps.length,0);
   const measurementCount = steps.filter(isMeasurement).length;
   const runningIndex = submittedRun?.run_id===status.execution?.current?.run_id && status.execution?.current?.controller_alive && submittedRun?.key===sequenceKey(executionSequence)
     ?liveStepIndex(flatRun,status.runtime,false,fresh):-1;
@@ -142,7 +144,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     try {
       const data = await api.experiment(id);
       const value = workflowToEditor(data.sequence);
-      setDraft(value); setBase({ id, version: data.version }); setDirty(false);
+      setDraft(value); setBase({ id, version: data.version });
+      const migrated=data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight);
+      setDirty(migrated);if(migrated)setNotice('已补入必需的前置准备功能块，请检查流路后保存方案。');
       setSelectedBlock(value.blocks[0]?._key || null);setSelected(null); setPlan(null);
       setRightTab('parameters');
       return true;
@@ -166,7 +170,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     setBusy('load-run');setError('');
     try {
       const data=await api.experiment(id);
-      setRunSequence(runSnapshot(data.sequence));setRunSource({kind:'file',id,version:data.version,label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
+      setRunSequence(runSnapshot(data.sequence));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
     }catch(failure){setError(failure.message);}
     finally{setBusy('');}
   }
@@ -179,7 +183,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     if(sequenceKey(sequence)!==sequenceKey(runSequence)) {
       if(dirty && !window.confirm('载入此流程进行编辑会替换当前未保存的设计草稿，是否继续？'))return;
       const value=workflowToEditor(runSequence);
-      setDraft(value);setBase({id:runSource?.id || null,version:runSource?.version || null});setDirty(runSource?.kind!=='file');
+      setDraft(value);setBase({id:runSource?.id || null,version:runSource?.version || null});setDirty(runSource?.kind!=='file' || runSource?.migrated===true);
       setSelectedBlock(value.blocks[0]?._key || null);setSelected(null);setPlan(null);
     }
     setPlanView('editor');navigate('plans');
@@ -227,6 +231,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   }
   function addStep(id) {
     if(!activeBlock) {setError('请先添加并选择一个功能块。');return;}
+    if(isPreflight(activeBlock)){setError('前置准备步骤固定，请选择实验功能块后添加动作。');return;}
     const step = makeStep(actionTemplates[id], health?.ui.default_volume_ml ?? 1);
     updateBlock({steps:[...activeBlock.steps,step]});
     selectAction(step._key);
@@ -236,6 +241,10 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   }
   function addBlock(template) {
     const source=template.kind?importBlock(template):template;
+    if(isPreflight(source)) {
+      const block=instantiateBlock(source,draft.blocks.filter(item=>!isPreflight(item)));
+      change(current=>({...current,blocks:[block,...current.blocks.filter(item=>!isPreflight(item))]}));selectBlock(block._key);return;
+    }
     const block=instantiateBlock(source,draft.blocks);
     change(current=>({...current,blocks:[...current.blocks,block]}));
     setSelectedBlock(block._key);setSelected(null);setRightTab('parameters');
@@ -261,14 +270,15 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       setLibraryOpen({seed,id});setModal('block-library');
     }catch(failure){setError('请先补全功能块：'+failure.message);}
   }
-  function copyBlock(key) {const source=draft.blocks.find(block=>block._key===key);const copy=instantiateBlock(source,draft.blocks);change(current=>({...current,blocks:current.blocks.flatMap(block=>block._key===key?[block,copy]:[block])}));selectBlock(copy._key);}
+  function copyBlock(key) {const source=draft.blocks.find(block=>block._key===key);if(isPreflight(source))return;const copy=instantiateBlock(source,draft.blocks);change(current=>({...current,blocks:current.blocks.flatMap(block=>block._key===key?[block,copy]:[block])}));selectBlock(copy._key);}
   function deleteBlock(key) {
+    if(isPreflight(draft.blocks.find(block=>block._key===key)))return;
     const index=draft.blocks.findIndex(block=>block._key===key),remaining=draft.blocks.filter(block=>block._key!==key);
     if(!window.confirm('删除此功能块及其内部的所有动作？')) return;
     change({blocks:remaining});
     if(selectedBlock===key) {setSelectedBlock(remaining[Math.min(index,remaining.length-1)]?._key || null);setSelected(null);}
   }
-  function reorderBlocks(from,to) {change(current=>({...current,blocks:moveStep(current.blocks,from,to)}));}
+  function reorderBlocks(from,to) {if(from<=0 || to<=0)return;change(current=>({...current,blocks:moveStep(current.blocks,from,to)}));}
   function selectAction(key) {
     setSelected(key); setRightTab('parameters');
   }
@@ -365,8 +375,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
         {activeNav!=='run' && (status.execution?.current?.can_stop || status.runtime?.controller_alive) && <button className="workspace-running-link" onClick={()=>navigate('run')}><span className={'status-dot '+(fresh?'green':'gray')}/>查看当前实验运行状态<ArrowUpRight size={14}/></button>}
-        {activeNav==='run' && <RunWorkspace sequence={runSequence} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
-        <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
+        {activeNav==='run' && <RunWorkspace sequence={runSequence} preparation={runPreparation && sequenceKey(runPreparation.sequence)===sequenceKey(executionSequence)?runPreparation:null} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
+        <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onProgress={setRunPreparation} onRestore={value=>{setRunSequence(structuredClone(value.sequence));setRunSource({kind:'restored',id:null,label:'恢复的前置流程'});setRunPlan(value.preview);}} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
         {activeNav==='run' && <><LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names}/>
           <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
         </>}

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {defaultPreflight,preflightInfo} from './preflight.js';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
@@ -12,9 +13,9 @@ const compiled=require('esbuild').buildSync({stdin:{contents:"export {default as
 const module={exports:{}};new Function('require','module','exports',compiled)(require,module,module.exports);
 const {AutomationControl,ExecutionConfirmation}=module.exports;
 const render=(component,props)=>renderToStaticMarkup(React.createElement(component,props));
-const sequence={schema_version:2,id:'synthetic_run',description:'Synthetic automation',steps:[{device:'peristaltic_1',operation:'inject',fluid:'water',volume_ml:1}]};
+const sequence={preflight:defaultPreflight(),schema_version:2,id:'synthetic_run',description:'Synthetic automation',steps:[{device:'peristaltic_1',operation:'inject',fluid:'water',volume_ml:1}]};
 const settings={user:{role:'admin'},enabled:true,fresh:true,runtime:{state:'idle'},errors:[]};
-const prepared={run_id:'synthetic-id',sequence,cell_preparation:{required:true,state:'passed'},preview:{estimated_timed_seconds:5,plan:{steps:[{...sequence.steps[0],id:'step_01',rpm:100}]}}};
+const prepared={run_id:'synthetic-id',sequence,cell_preparation:{required:true,state:'passed'},preview:{preflight:preflightInfo(sequence),estimated_timed_seconds:5,plan:{steps:[{...sequence.steps[0],id:'step_01',rpm:100}]}}};
 
 test('only a connected administrator with a supported valid plan can prepare automation',()=>{
   assert.equal(automationAvailability(settings).allowed,true);
@@ -38,24 +39,24 @@ test('disconnected execution monitoring does not claim a live running state and 
 });
 test('confirmation lists actual server-prepared pump amounts and rejects a subsequently changed draft',()=>{
   const html=render(ExecutionConfirmation,{prepared,currentSequence:sequence,names:{peristaltic_1:'Water pump'}});
-  assert.match(html,/Water pump/);assert.match(html,/1 mL/);assert.match(html,/100 rpm/);assert.match(html,/确认启动设备/);
+  assert.match(html,/Water pump/);assert.match(html,/1 mL/);assert.match(html,/100 rpm/);assert.match(html,/开始前置功能块/);
   assert.equal(preparedIsCurrent(prepared,sequence),true);
   assert.equal(sequenceKey(sequence),sequenceKey(Object.fromEntries(Object.entries(sequence).reverse())));
   const changed={...sequence,description:'Changed after preparation'};
   assert.equal(preparedIsCurrent(prepared,changed),false);
   const invalid=render(ExecutionConfirmation,{prepared,currentSequence:changed,names:{}});
-  assert.match(invalid,/编排内容已修改/);assert.match(invalid,/<button class="primary-button" disabled=""/);
+  assert.match(invalid,/载入的流程已修改/);assert.match(invalid,/<button class="primary-button" disabled=""/);
 });
 test('a syringe experiment clearly shows missing calibration and cannot start until this preparation passed',()=>{
   const syringe={...sequence,steps:[{device:'syringe_c',operation:'inject',fluid:'electrolyte',volume_ml:1}]};
-  const input={...prepared,sequence:syringe,calibration:{required:true,state:'required'}};
+  const input={...prepared,sequence:syringe,preview:{...prepared.preview,preflight:preflightInfo(syringe)},calibration:{required:true,state:'required'}};
   const html=render(ExecutionConfirmation,{prepared:input,currentSequence:syringe,names:{}});
-  assert.match(html,/本次实验注射泵回零校验/);assert.match(html,/未校验/);assert.match(html,/已确认本次回零排液安全/);
+  assert.match(html,/前置准备功能块/);assert.match(html,/注射泵回零与核验/);assert.match(html,/已确认本次回零排液/);
   assert.match(html,/<button class="primary-button" disabled=""/);
   for(const state of ['required','running','failed','invalidated','unknown','consumed']) assert.equal(calibrationAllowsStart({required:true,state}),false);
   assert.equal(calibrationAllowsStart({required:true,state:'passed'}),true);
-  const passed=render(ExecutionConfirmation,{prepared:input,currentSequence:syringe,names:{},calibration:{required:true,state:'passed'}});
-  assert.match(passed,/已通过/);assert.doesNotMatch(passed,/<button class="primary-button" disabled=""/);
+  const passed=render(ExecutionConfirmation,{prepared:{...input,calibration:{required:true,state:'passed'},workflow:{phase:'awaiting_confirmation'}},currentSequence:syringe,names:{}});
+  assert.match(passed,/已核验/);assert.match(passed,/确认空池并继续流程/);assert.match(passed,/<button class="primary-button" disabled=""/);
 });
 test('calibration request binds the preparation and requires explicit discharge confirmation',async()=>{
   const calls=[];

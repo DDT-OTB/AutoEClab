@@ -16,6 +16,7 @@ from .status_refresh import RefreshBusy, StatusRefresh
 from .measurement import compile_workflow, is_measurement, measurement_templates
 from .cell_safety import CellSafetyError, load_policy, require_safe_volumes
 from .workflow import flatten_sequence, block_ranges
+from .preflight import require_preflight
 
 
 class ApiError(Exception):
@@ -78,7 +79,8 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.11.0",
+            "ok": True, "service": "pump-console", "version": "0.12.0",
+            "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,
             "workflow_schema_versions": [2, 3],
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
@@ -93,13 +95,20 @@ class LabRepository:
             "ui": {"default_volume_ml": 1, "status_poll_seconds": self.monitoring["push_interval_seconds"]},
         }
 
-    def preview(self, sequence, _templates=None):
+    def preview(self, sequence, _templates=None, _internal_drain=False):
         if not isinstance(sequence, dict):
             raise ApiError(400, "sequence 必须是 JSON 对象。")
         identifier(sequence.get("id"))
         if re.search(r"[\u3400-\u9fff]", json.dumps(sequence, ensure_ascii=False)):
             raise ApiError(422, "配置 JSON 请使用英文；界面和说明文档可以使用中文。", "english_json_required")
         try:
+            if _internal_drain:
+                from .cell_safety import drain_sequence
+                if sequence != drain_sequence(load_policy(), sequence['steps'][0]['route']):
+                    raise ValueError('Invalid internal startup drain')
+                preflight = None
+            else:
+                preflight = require_preflight(sequence)
             flattened = flatten_sequence(sequence)
             devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
             plan = compile_workflow(sequence, devices, templates, self.compiler, self.config)
@@ -118,6 +127,7 @@ class LabRepository:
             if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in flattened["steps"]):
                 warnings.append("部分测量动作尚未指定参比电极；当前电位参数仅为编排草稿。")
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
+                "preflight": preflight,
                 "blocks": block_ranges(sequence),
                 "cell_safety": cell_safety, "safety_policy": load_policy(),
                 "hardware_executed": False, "generated_at": utc_now()}
@@ -341,7 +351,7 @@ class LabRepository:
                     "~~~json\n" + json.dumps(step["parameters"],ensure_ascii=False,indent=2) + "\n~~~\n" +
                     "JSON 使用 V、V/s、A 和 s；圈数为完整循环数。电位以所填参比电极为准。\n")
         groups = block_ranges(sequence)
-        group_text = "\n\n功能块顺序：" + " → ".join(f"{item['id']}（动作 {item['first_step']}–{item['last_step']}）" for item in groups) if groups else ""
+        group_text = "\n\n功能块顺序：" + " → ".join(f"{item['id']}（必需前置准备）" if item.get('type') == 'preflight' else f"{item['id']}（动作 {item['first_step']}–{item['last_step']}）" for item in groups) if groups else ""
         block = (
             f"{start}\n## 图形化编辑器配置摘要\n\n"
             f"方案：{sequence['id']}" + group_text + "\n\n" + "\n".join(rows) + "".join(measurement_blocks) +

@@ -81,6 +81,8 @@ class BlockLibrary:
     def _validate(self, document):
         try:
             block = import_block(document)
+            if block.get('type') == 'preflight':
+                return deepcopy(document)
             devices, templates = self.repository.compiler.load_templates(self.repository.templates_dir)
             # A reusable block may consume a route selected by a preceding block.
             # Supply routing context only to the validator; never store or execute it.

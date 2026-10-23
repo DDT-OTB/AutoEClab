@@ -61,6 +61,7 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     runs: () => request('/api/runs'),
     execution: () => request('/api/execution'),
     prepareExecution: sequence => request('/api/execution/prepare', { method: 'POST', body: JSON.stringify({sequence}) }),
+    advanceWorkflow: (run_id,version,confirm_discharge=false,empty_confirmed=false) => request('/api/execution/advance', {method:'POST',body:JSON.stringify({run_id,version,confirm_discharge,empty_confirmed})}),
     preparation: run_id => request('/api/execution/preparations/' + encodeURIComponent(run_id)),
     calibrateExecution: (run_id, version, confirm_discharge) => request('/api/execution/calibrate', { method: 'POST', body: JSON.stringify({run_id, version, confirm_discharge}) }),
     drainCell: (run_id, version, route, confirm_discharge, request_id) => request('/api/execution/drain', {method:'POST',body:JSON.stringify({run_id,version,route,confirm_discharge,request_id})}),

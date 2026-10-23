@@ -79,7 +79,7 @@ test('the workflow canvas selects blocks while the inspector owns block and acti
 });
 test('the application renders an empty block editor without assuming top-level actions exist',()=>{
   const html=renderToStaticMarkup(React.createElement(App,{user:{username:'synthetic_viewer',role:'viewer'},initialPage:'plans',initialPlanView:'editor'}));
-  assert.match(html,/从第一个功能块开始/);
+  assert.match(html,/添加实验功能块/);
   assert.match(html,/功能块 \/ 动作/);
   assert.doesNotMatch(html,/确认启动设备/);
 });

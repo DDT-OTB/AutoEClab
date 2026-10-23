@@ -272,13 +272,14 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     with auth.db() as db:
                         auth.audit(db, 'function_block_saved/' + result['id'], session['user']['username'], self.request_peer)
                     return self.json_response(200, result)
-                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty'):
+                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty', '/api/execution/advance'):
                     self.require_admin(session)
                     payload = self.body()
                     schemas = {'prepare': {'sequence'}, 'start': {'run_id', 'version'}, 'stop': {'run_id'},
                                'calibrate': {'run_id', 'version', 'confirm_discharge'},
                                'drain': {'run_id', 'version', 'route', 'confirm_discharge', 'request_id'},
-                               'confirm-empty': {'run_id', 'version', 'empty_confirmed'}}
+                               'confirm-empty': {'run_id', 'version', 'empty_confirmed'},
+                               'advance': {'run_id', 'version', 'confirm_discharge', 'empty_confirmed'}}
                     expected = schemas[path.rsplit('/', 1)[-1]]
                     if not isinstance(payload, dict) or set(payload) != expected:
                         raise ApiError(400, 'Invalid automation request fields')
@@ -297,6 +298,8 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         result = repository.execution.drain_cell(payload['run_id'], payload['version'], actor, payload['route'], payload['confirm_discharge'], payload['request_id'])
                     elif action == 'confirm-empty':
                         result = repository.execution.confirm_empty(payload['run_id'], payload['version'], actor, payload['empty_confirmed'])
+                    elif action == 'advance':
+                        result = repository.execution.advance_workflow(payload['run_id'], payload['version'], actor, payload['confirm_discharge'], payload['empty_confirmed'])
                     else:
                         result = repository.execution.stop(payload['run_id'], actor)
                     with auth.db() as db:

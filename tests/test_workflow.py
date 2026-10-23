@@ -8,6 +8,7 @@ from unittest.mock import patch
 import test_api
 from pump_console.measurement import measurement_templates
 from pump_console.repository import ApiError
+from pump_console.preflight import default_preflight
 from pump_console.workflow import flatten_sequence, import_block, function_block_templates
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,9 +38,9 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(code, 200, result)
         flattened = flatten_sequence(sequence)
         self.assertEqual(len(result['plan']['steps']), 9)
-        self.assertEqual(result['plan'], self.repo.preview(flattened)['plan'])
+        self.assertEqual(result['plan'], self.repo.preview({**flattened,'preflight':default_preflight()})['plan'])
         self.assertEqual([step['id'] for step in result['plan']['steps']], [step['id'] for step in flattened['steps']])
-        self.assertEqual([item['first_step'] for item in result['blocks']], [1, 4, 5, 7])
+        self.assertEqual([item['first_step'] for item in result['blocks'] if item.get('type') != 'preflight'], [1, 4, 5, 7])
         self.assertEqual(result['cell_safety']['peak_volume_ml'], 15)
         self.assertFalse(result['hardware_executed'])
 
@@ -48,7 +49,7 @@ class WorkflowApiTests(unittest.TestCase):
         code, saved = self.request('POST', '/api/experiments', {'sequence': sequence})
         self.assertEqual(code, 200, saved)
         self.assertEqual(saved['sequence'], sequence)
-        self.assertEqual(saved['block_count'], 4)
+        self.assertEqual(saved['block_count'], 5)
         self.assertEqual(saved['step_count'], 9)
         self.assertEqual(self.request('GET', '/api/experiments/'+sequence['id'])[1]['sequence'], sequence)
         catalog = self.request('GET', '/api/experiments')[1]['experiments']
@@ -66,24 +67,24 @@ class WorkflowApiTests(unittest.TestCase):
         first = {'id': 'water', 'description': 'Water', 'steps': [{'device': 'peristaltic_1', 'operation': 'inject', 'volume_ml': 25, 'fluid': 'water'}]}
         second = {'id': 'acid', 'description': 'Acid', 'steps': [{'device': 'peristaltic_3', 'operation': 'inject', 'volume_ml': 16, 'fluid': 'sulfuric_acid'}]}
         drain = import_block(next(item for item in function_block_templates() if item['id']=='drain_waste_1'))
-        sequence['blocks'] = [first, second, drain]
+        sequence['blocks'] = [default_preflight(),first, second, drain]
         self.repo.execution.enabled = True
         for route in ('/api/preview', '/api/experiments', '/api/execution/prepare'):
             code, error = self.request('POST', route, {'sequence': sequence})
             self.assertEqual(code, 422)
             self.assertEqual(error['error'], 'cell_capacity_exceeded')
-        sequence['blocks'] = [first, drain, second]
+        sequence['blocks'] = [default_preflight(),first, drain, second]
         self.assertEqual(self.request('POST', '/api/preview', {'sequence': sequence})[0], 200)
 
     def test_routes_carry_between_blocks_and_missing_or_reordered_routes_are_rejected(self):
         sequence = self.workflow()
         route = {'id': 'route', 'description': 'Route', 'steps': [{'device': 'valve', 'operation': 'switch_route', 'route': 'waste_2'}]}
         drain = {'id': 'drain', 'description': 'Drain', 'steps': [{'device': 'peristaltic_2', 'operation': 'withdraw', 'volume_ml': 10, 'fluid': 'waste_liquid'}]}
-        sequence['blocks'] = [route, drain]
+        sequence['blocks'] = [default_preflight(),route, drain]
         code, result = self.request('POST', '/api/preview', {'sequence': sequence})
         self.assertEqual(code, 200, result)
         self.assertEqual(result['plan']['steps'][1]['required_channel'], 6)
-        sequence['blocks'].reverse()
+        sequence['blocks'][1:] = reversed(sequence['blocks'][1:])
         self.assertEqual(self.request('POST', '/api/preview', {'sequence': sequence})[0], 422)
 
     def test_ambiguous_nested_empty_or_duplicate_blocks_and_external_references_are_rejected(self):
@@ -102,7 +103,7 @@ class WorkflowApiTests(unittest.TestCase):
     def test_cv_inside_any_block_is_planning_only_and_blocks_the_whole_execution(self):
         sequence = self.workflow()
         template = measurement_templates()['electrochemical_station']
-        sequence['blocks'].insert(2, {'id': 'cv', 'description': 'CV draft', 'steps': [
+        sequence['blocks'].insert(3, {'id': 'cv', 'description': 'CV draft', 'steps': [
             {'device': 'electrochemical_station', 'operation': 'measure', 'technique': 'cyclic_voltammetry', 'parameters': template['action']['default_parameters']}]})
         code, result = self.request('POST', '/api/preview', {'sequence': sequence})
         self.assertEqual(code, 200, result)
@@ -119,7 +120,7 @@ class WorkflowApiTests(unittest.TestCase):
         prepared = self.repo.execution.prepare(sequence, 'test_admin')
         folder, job = self.repo.execution._job(prepared['run_id'])
         snapshot = (folder/'snapshot.json').read_bytes()
-        sequence['blocks'][1]['steps'][0]['volume_ml'] = 20
+        sequence['blocks'][2]['steps'][0]['volume_ml'] = 20
         self.assertEqual((folder/'snapshot.json').read_bytes(), snapshot)
         self.assertEqual(json.loads(snapshot)['sequence']['schema_version'], 3)
         self.assertTrue(prepared['calibration']['required'])

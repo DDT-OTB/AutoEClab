@@ -1,122 +1,101 @@
 import React, {useEffect,useRef,useState} from 'react';
-import {AlertCircle, CheckCircle2, Clock3, LoaderCircle, LockKeyhole, Play, RotateCcw, ShieldCheck, Square, X} from 'lucide-react';
+import {LoaderCircle,LockKeyhole,Play,ShieldCheck,Square,X} from 'lucide-react';
 import {appApi as api} from './api.js';
-import {automationAvailability,calibrationAllowsStart,calibrationLabels,executionLabels,preparedIsCurrent} from './automation.js';
-import {fluidLabels,formatDuration,operationLabels} from './model.js';
-import CellPreparation from './CellPreparation.jsx';
-import {cellAllowsStart,cellPreparationLabels,cellVolumes} from './cellSafety.js';
-import {flattenSequence} from './workflow.js';
+import {automationAvailability,executionLabels,preparedIsCurrent} from './automation.js';
+import {operationLabels} from './model.js';
 
-export function ExecutionConfirmation({prepared,currentSequence,pending,error,onStart,onClose,names,blockedReason,calibration,onCalibrate,calibrationBusy,onStop,canStop,cellPreparation,onDrain,onEmptyConfirm,cellBusy,canStopDrain,fresh=true}) {
-  const [confirmDischarge,setConfirmDischarge]=useState(false);
-  const checked=calibration || prepared.calibration;
-  const calibrationReady=calibrationAllowsStart(checked);
-  const cell=cellPreparation || prepared.cell_preparation;
-  const preflightRunning=calibrationBusy || checked?.state==='running' || cellBusy || cell?.state==='running';
-  const current=preparedIsCurrent(prepared,currentSequence);
-  const steps=prepared.preview.plan.steps;
-  return <div className="modal-backdrop automation-backdrop"><section className="modal automation-confirmation" role="dialog" aria-modal="true" aria-label="确认启动自动化实验">
-    <div className="modal-header"><h2><ShieldCheck size={19}/>确认本次实验</h2><button className="icon-button" onClick={onClose} disabled={pending || preflightRunning} aria-label="关闭运行确认"><X size={18}/></button></div>
-    <p className="automation-confirmation-intro">确认后，服务器将实际操作下列泵阀。运行使用本次固定的 JSON 与设备参数，编排中的后续修改不会改变本次任务。</p>
-    <div className="automation-plan-heading"><strong>{prepared.sequence.id}</strong><span>{steps.length} 步 · 计时动作约 {formatDuration(prepared.preview.estimated_timed_seconds)}</span></div>
-    <ol className="automation-confirm-steps">{steps.map((step,index)=><li key={step.id}><span>{String(index+1).padStart(2,'0')}</span><div><strong>{names[step.device] || step.device}</strong><small>{operationLabels[step.operation] || step.action}{step.fluid?' · '+(fluidLabels[step.fluid] || step.fluid):''}{step.volume_ml!==undefined?' · '+step.volume_ml+' mL':''}{step.route?' · '+step.route:''}{step.channel?' · 通道 '+step.channel:''}{step.rpm?' · '+step.rpm+' rpm':''}</small></div></li>)}</ol>
-    {checked?.required && <section className={'syringe-calibration state-'+checked.state} aria-label="本次实验注射泵回零校验"><div><strong>注射泵回零校验</strong><span role="status">{calibrationLabels[checked.state] || '未校验'}</span></div><p>每次实验都需先完成本次机械回零、零位与状态核验。回零会移动活塞并改变阀位，可能排出残留液体。重新上电后需重新准备校验。</p>
-      {checked.state==='passed'?<p className="calibration-passed"><CheckCircle2 size={15}/>本次校验通过，零位 0、缓冲区为空且设备已就绪。此记录只供本次启动使用。</p>:<><label><input type="checkbox" checked={confirmDischarge} onChange={event=>setConfirmDischarge(event.target.checked)} disabled={calibrationBusy || checked.state==='running' || cellBusy || cell?.state==='running' || !fresh}/>已确认本次回零排液安全，管路及接液容器已就绪</label><div className="calibration-actions"><button className="outline-button" onClick={()=>{onCalibrate(confirmDischarge);setConfirmDischarge(false);}} disabled={!confirmDischarge || pending || calibrationBusy || checked.state==='running' || cellBusy || cell?.state==='running' || !fresh || !current}><RotateCcw size={14}/>{calibrationBusy || checked.state==='running'?'正在回零校验…':'执行本次回零校验'}</button>{canStop && <button className="automation-stop" onClick={onStop}><Square size={13}/>停止回零</button>}</div></>}
-      {checked.message && checked.state!=='passed' && <p>{checked.message}</p>}
-    </section>}
-    <CellPreparation state={cell} policy={prepared.preview.safety_policy} busy={cellBusy} onDrain={onDrain} onConfirm={onEmptyConfirm} onStop={onStop} canStop={canStopDrain} disabled={pending || calibrationBusy || checked?.state==='running' || !current || !fresh}/>
-    {prepared.preview.cell_safety && <p className="automation-confirmation-note">正式流程按空池起始，预计峰值 {prepared.preview.cell_safety.peak_volume_ml} / {prepared.preview.cell_safety.capacity_ml} mL。水、硫酸、电解液统一计入总量。</p>}
-    <p className="automation-confirmation-note"><Clock3 size={14}/>体积按标定与步数换算，进度为估算。控制器会先预检所有参与设备，任何一步失败都会中止流程并尝试停止设备。</p>
-    {!current && <p className="automation-error" role="alert">编排内容已修改，请关闭并重新准备运行。</p>}
-    {error && <p className="automation-error" role="alert">{error}</p>}
-    {blockedReason && !pending && <p className="automation-error" role="alert">{blockedReason}</p>}
-    <div className="automation-dialog-actions"><button className="outline-button" onClick={onClose} disabled={pending || preflightRunning}>返回检查</button><button className="primary-button" onClick={onStart} disabled={pending || !current || !!blockedReason || !calibrationReady || !cellAllowsStart(cell)}>{pending?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>} {pending?'正在提交启动…':'确认启动设备'}</button></div>
+import {PreflightProgress} from './PreflightBlock.jsx';
+import {canAutoAdvance,preflightInfo} from './preflight.js';
+
+export function ExecutionConfirmation({prepared,currentSequence,pending,error,onClose,names,blockedReason,onAdvance,onStop,canStop,fresh=true,automatic=false}) {
+  const [discharge,setDischarge]=useState(false),[empty,setEmpty]=useState(false);
+  useEffect(()=>{setEmpty(false);},[prepared.run_id,prepared.cell_preparation?.run_id]);
+  const current=preparedIsCurrent(prepared,currentSequence),phase=prepared.workflow?.phase || 'awaiting_start';
+  const running=['homing','draining'].includes(phase),waiting=['awaiting_confirmation','ready_to_start'].includes(phase);
+  const failed=['failed','stopped','unknown'].includes(phase),ready=phase==='awaiting_start' || ['ready_to_home','ready_to_drain'].includes(phase);
+  const info=prepared.preview.preflight || preflightInfo(prepared.sequence);
+  const mainSteps=prepared.preview.plan.steps;
+  return <div className="modal-backdrop automation-backdrop"><section className="modal automation-confirmation" role="dialog" aria-modal="true" aria-label="确认执行实验流程">
+    <div className="modal-header"><h2><ShieldCheck size={19}/>执行实验流程</h2><button className="icon-button" onClick={onClose} disabled={pending || running} aria-label="关闭流程执行"><X size={18}/></button></div>
+    <p className="automation-confirmation-intro">前置功能块通过后，才会执行正式实验。每次运行都使用本次固定的方案与设备参数。</p>
+    <div className="automation-plan-heading"><strong>{prepared.sequence.id}</strong><span>前置准备 + {mainSteps.length} 个实验动作</span></div>
+    <PreflightProgress info={info} calibration={prepared.calibration} cell={prepared.cell_preparation}>
+      {waiting?<label className="preflight-acknowledgement"><input type="checkbox" checked={empty} disabled={pending || !fresh} onChange={event=>setEmpty(event.target.checked)}/>已现场检查，确认本次电解池已排空</label>:ready && !automatic?<label className="preflight-acknowledgement"><input type="checkbox" checked={discharge} disabled={pending || !fresh} onChange={event=>setDischarge(event.target.checked)}/>已确认本次回零排液和所选废液流路的接液条件安全</label>:null}
+    </PreflightProgress>
+    {running && <p className="automation-notice">前置功能块正在执行，完成后进入下一步骤。</p>}
+    {waiting && <p className="automation-notice">流程暂停在人工确认步骤；确认后将开始后续实验动作。</p>}
+    <details className="preflight-main-preview"><summary>后续实验动作 · {mainSteps.length} 步</summary><ol className="automation-confirm-steps">{mainSteps.map((step,index)=><li key={step.id}><span>{index+1}</span><div><strong>{names[step.device] || step.device}</strong><small>{operationLabels[step.operation] || step.action}{step.volume_ml!==undefined?' · '+step.volume_ml+' mL':''}{step.route?' · '+step.route:''}{step.rpm?' · '+step.rpm+' rpm':''}</small></div></li>)}</ol></details>
+    {!current && <p className="automation-error" role="alert">载入的流程已修改，请关闭并重新准备。</p>}
+    {(error || prepared.workflow?.message) && <p className="automation-error" role="alert">{error || prepared.workflow.message}</p>}
+    <div className="automation-dialog-actions"><button className="outline-button" onClick={onClose} disabled={pending || running}>返回</button>{canStop && <button className="automation-stop" onClick={onStop}><Square size={14}/>停止当前步骤</button>}
+      <button className="primary-button" disabled={pending || running || failed || !current || !fresh || (waiting?!empty:!discharge) || (!waiting && !ready)} onClick={()=>onAdvance(waiting?false:discharge,waiting?empty:false)}>{pending || running?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>} {waiting?'确认空池并继续流程':running?'前置步骤执行中…':prepared.workflow?.authorized?'继续前置流程':'开始前置功能块'}</button>
+    </div>
   </section></div>;
 }
 
-export default function AutomationControl({user,sequence,status,health,fresh,errors,measurementCount,busy,names,onPlan,onRefresh,onStarted,templates={},visible=true,hasSequence=true}) {
+export default function AutomationControl({user,sequence,status,health,fresh,errors,measurementCount,busy,names,onPlan,onRefresh,onStarted,onRestore,onProgress,templates={},visible=true,hasSequence=true}) {
   const [prepared,setPrepared]=useState(null),[pending,setPending]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
-  const [calibration,setCalibration]=useState(null);
-  const [cellPreparation,setCellPreparation]=useState(null);
-  const drainRequest=useRef(null);
-  const pendingRef=useRef(false), currentSequence=useRef(sequence);
-  currentSequence.current=sequence;
-  const current=status.execution?.current;
-  const enabled=status.execution?.enabled ?? health?.hardware_execution_enabled;
+  const [automatic,setAutomatic]=useState(false),[resumable,setResumable]=useState(null);
+  const pendingRef=useRef(false),currentSequence=useRef(sequence);currentSequence.current=sequence;
+  const preparedRef=useRef(prepared);preparedRef.current=prepared;
+  const completedRuns=useRef(new Set());
+  const current=status.execution?.current,enabled=status.execution?.enabled ?? health?.hardware_execution_enabled;
   const availability=automationAvailability({user,enabled,fresh,current,runtime:status.runtime,errors:hasSequence?errors:['请先加载或导入一个实验流程。'],measurementCount,busy:busy || !!pending});
-  useEffect(()=>{if(current?.run_id) setNotice('');},[current?.run_id]);
+  useEffect(()=>{if(current?.run_id)setNotice('');},[current?.run_id]);
+  function accept(value) {
+    if(preparedRef.current?.run_id!==value.run_id)return;
+    if(completedRuns.current.has(value.run_id))return;
+    onProgress?.(value);
+    if(value.workflow?.main_started){completedRuns.current.add(value.run_id);onStarted?.(value.sequence,value.run_id);preparedRef.current=null;setPrepared(null);setAutomatic(false);setNotice(value.workflow.phase==='failed'?'正式实验启动或执行失败，请查看运行反馈。':'已提交正式实验，等待控制器预检与运行反馈。');}
+    else setPrepared(previous=>previous?.run_id===value.run_id?{...previous,...value}:value);
+  }
   useEffect(()=>{
-    if(!prepared) return;
+    if(!prepared)return;
     let disposed=false,fetching=false;
-    drainRequest.current=null;
-    const poll=async()=>{if(fetching) return;fetching=true;try {const value=await api.preparation(prepared.run_id);if(!disposed){setCalibration(value.calibration);setCellPreparation(value.cell_preparation);}}catch(failure){if(!disposed){setError(failure.message);setCalibration(previous=>previous?.required?{...previous,state:'unknown'}:previous);setCellPreparation(previous=>({...previous,required:true,state:'unknown'}));}}finally{fetching=false;}};
+    const poll=async()=>{if(fetching)return;fetching=true;try{const value=await api.preparation(prepared.run_id);if(!disposed)accept(value);}catch(failure){if(!disposed){setError(failure.message);setAutomatic(false);setPrepared(previous=>previous?{...previous,workflow:{...previous.workflow,phase:'unknown',needs_advance:false}}:previous);}}finally{fetching=false;}};
     poll();const timer=setInterval(poll,1000);return()=>{disposed=true;clearInterval(timer);};
   },[prepared?.run_id]);
+  useEffect(()=>{
+    const id=current?.target_run_id;if(!id || prepared || user?.role!=='admin'){setResumable(null);return;}
+    let disposed=false;
+    api.preparation(id).then(value=>{if(!disposed && value.workflow?.authorized && !value.workflow.main_started && value.workflow.phase!=='failed')setResumable(value);}).catch(()=>{});
+    return()=>{disposed=true;};
+  },[current?.target_run_id,prepared?.run_id]);
   async function prepare() {
-    if(pendingRef.current || !hasSequence || !availability.allowed) return;
-    pendingRef.current=true;setPending('prepare');setError('');setNotice('');
-    try {
-      const result=await api.prepareExecution(sequence);
-      if(!preparedIsCurrent(result,currentSequence.current)){setError('已载入的流程发生变化，请重新准备本次运行。');return;}
-      setPrepared(result);setCalibration(result.calibration);setCellPreparation(result.cell_preparation);onPlan(result.preview);
-    }
-    catch(failure) {setError(failure.message);}
-    finally {pendingRef.current=false;setPending('');}
+    if(pendingRef.current || !hasSequence || !availability.allowed)return;
+    pendingRef.current=true;setPending('prepare');setError('');setNotice('');setAutomatic(false);
+    try{const result=await api.prepareExecution(sequence);if(!preparedIsCurrent(result,currentSequence.current)){setError('载入流程已变化，请重新准备。');return;}preparedRef.current=result;setPrepared(result);onProgress?.(result);onPlan(result.preview);}
+    catch(failure){setError(failure.message);}finally{pendingRef.current=false;setPending('');}
   }
-  async function start() {
-    if(pendingRef.current || !availability.allowed || !calibrationAllowsStart(calibration) || !cellAllowsStart(cellPreparation) || !preparedIsCurrent(prepared,currentSequence.current) || user?.role!=='admin') return;
-    pendingRef.current=true;setPending('start');setError('');
-    try {await api.startExecution(prepared.run_id,prepared.version);onStarted?.(prepared.sequence,prepared.run_id);setPrepared(null);setNotice('启动请求已接受，正在等待控制器预检与运行反馈。');await onRefresh();}
-    catch(failure) {setError(failure.message);await onRefresh();}
-    finally {pendingRef.current=false;setPending('');}
+  async function advance(discharge=false,empty=false) {
+    if(pendingRef.current || user?.role!=='admin' || !fresh || !preparedIsCurrent(prepared,currentSequence.current))return;
+    pendingRef.current=true;setPending('advance');setError('');
+    try{const result=await api.advanceWorkflow(prepared.run_id,prepared.version,discharge,empty);accept(result);setAutomatic(!result.workflow?.main_started);await onRefresh();}
+    catch(failure){setError(failure.message);setAutomatic(false);}finally{pendingRef.current=false;setPending('');}
   }
+  useEffect(()=>{if(!pending && canAutoAdvance(prepared,sequence,fresh,automatic))void advance();},[prepared?.workflow?.phase,prepared?.workflow?.needs_advance,automatic,fresh,pending,sequence]);
   async function stop() {
-    if(pendingRef.current || !current?.can_stop || user?.role!=='admin') return;
-    pendingRef.current=true;setPending('stop');setError('');setNotice('');
-    try {const result=await api.stopExecution(current.run_id);setNotice(result.stop_requested?'已提交停止请求，等待控制器完成停泵与关闭清理。':'控制器已经结束，请查看运行结果。');await onRefresh();}
-    catch(failure) {setError(failure.message);}
-    finally {pendingRef.current=false;setPending('');}
+    if(pendingRef.current || !current?.can_stop || user?.role!=='admin')return;
+    pendingRef.current=true;setPending('stop');setError('');setAutomatic(false);
+    try{const result=await api.stopExecution(current.run_id);setNotice(result.stop_requested?'已请求停止，等待控制器清理反馈。':'当前控制器已结束。');await onRefresh();}
+    catch(failure){setError(failure.message);}finally{pendingRef.current=false;setPending('');}
   }
-  async function calibrate(confirmDischarge) {
-    if(pendingRef.current || user?.role!=='admin' || !fresh || !preparedIsCurrent(prepared,currentSequence.current) || confirmDischarge!==true) return;
-    pendingRef.current=true;setPending('calibrate');setError('');
-    try {const value=await api.calibrateExecution(prepared.run_id,prepared.version,true);setCalibration(value.calibration);await onRefresh();}
-    catch(failure) {setError(failure.message);}
-    finally {pendingRef.current=false;setPending('');}
-  }
-  async function drain(route,confirmDischarge) {
-    if(pendingRef.current || user?.role!=='admin' || !fresh || !preparedIsCurrent(prepared,currentSequence.current) || confirmDischarge!==true) return;
-    pendingRef.current=true;setPending('drain');setError('');
-    drainRequest.current ||= crypto.randomUUID();
-    try {const value=await api.drainCell(prepared.run_id,prepared.version,route,true,drainRequest.current);drainRequest.current=null;setCellPreparation(value.cell_preparation);await onRefresh();}
-    catch(failure) {setError(failure.message);}
-    finally {pendingRef.current=false;setPending('');}
-  }
-  async function confirmEmpty(confirmed) {
-    if(pendingRef.current || user?.role!=='admin' || confirmed!==true || !fresh || !preparedIsCurrent(prepared,currentSequence.current)) return;
-    pendingRef.current=true;setPending('empty');setError('');
-    try {const value=await api.confirmEmpty(prepared.run_id,prepared.version,true);setCellPreparation(value.cell_preparation);}
-    catch(failure) {setError(failure.message);}
-    finally {pendingRef.current=false;setPending('');}
+  async function restore() {
+    if(pendingRef.current || !resumable || user?.role!=='admin')return;
+    pendingRef.current=true;setPending('restore');setError('');setAutomatic(false);
+    try{const value=await api.preparation(resumable.run_id);onRestore?.(value);preparedRef.current=value;setPrepared(value);onProgress?.(value);setResumable(null);}
+    catch(failure){setError(failure.message);}finally{pendingRef.current=false;setPending('');}
   }
   const active=fresh && current?.controller_alive;
-  const currentCalibrated=active && current?.sequence_id===sequence.id && current?.syringe_calibration_passed;
-  const visibleCalibration=prepared?(calibration?.state || 'required'):currentCalibrated?'passed':'required';
-  const displayTitle=!fresh?'运行状态连接待恢复':current?.operation==='drain_cell'?({completed:'启动前排液已完成，待确认空池',failed:'启动前排空失败',stopped:'排空已中止'}[current.state] || '正在执行启动前排空'):current?.operation==='calibrate_syringe'?({completed:'本次回零校验已通过',failed:'回零校验失败',stopped:'回零校验已中止'}[current.state] || '正在进行注射泵回零校验'):current?.state==='failed' && !active?'上次实验未完成':current?executionLabels[current.state] || '运行状态待确认':enabled?'管理员自动化控制':'配置与离线预演';
-  const volumes=cellVolumes(sequence,undefined,templates);
-  const currentCellReady=active && current?.sequence_id===sequence.id && current?.cell_preparation_passed;
-  const visibleCellPreparation=prepared?(cellPreparation?.state || 'required'):currentCellReady?'passed':'required';
+  const displayTitle=!fresh?'运行状态连接待恢复':current?.operation==='calibrate_syringe'?'正在执行前置回零步骤':current?.operation==='drain_cell'?'正在执行前置排空步骤':current?executionLabels[current.state] || '运行状态待确认':enabled?'实验流程控制':'配置与离线预演';
   return <>{visible && <section className={'automation-control '+(active?'automation-active':'')} aria-label="自动化运行控制">
     <div className="automation-control-main"><span className="automation-shield"><ShieldCheck size={20}/></span><div><strong>{displayTitle}</strong><p>{active?current.sequence_id+' · 操作人 '+current.started_by:hasSequence?'已载入流程：'+sequence.id:'尚未载入实验流程'}</p></div><div className="automation-control-buttons">
-      {user?.role==='admin' ? <>{current?.can_stop && <button className="automation-stop" onClick={stop} disabled={!!pending || current.stop_requested}><Square size={14}/>{pending==='stop' || current.stop_requested?'等待停止反馈…':'停止当前实验'}</button>}<button className="primary-button" onClick={prepare} disabled={!availability.allowed} title={availability.reason}>{pending==='prepare'?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>} {pending==='prepare'?'后端校验中…':'运行已载入流程'}</button></> : <span className="automation-viewer"><LockKeyhole size={13}/>只读监测</span>}
-    </div></div>
-    <p className="automation-control-note">{availability.reason}</p>
-    {hasSequence && <div className="calibration-overview" aria-label="电解池容量与启动前准备"><span>容量上限 {volumes.capacity_ml} mL</span><small>本方案预计峰值 {volumes.peak_volume_ml} mL · {currentCellReady?'运行中任务空池准备':'启动前排空'}：{cellPreparationLabels[visibleCellPreparation]} · 需人工确认空池</small></div>}
-    {flattenSequence(sequence).steps.some(step=>step.device==='syringe_c') && <div className="calibration-overview" aria-label="注射泵实验前校验状态"><span className={visibleCalibration==='passed'?'is-passed':''}>本次回零：{calibrationLabels[visibleCalibration]}</span><small>每次实验前必需；点击“运行已载入流程”完成校验。{status.execution?.syringe_calibration?.last_homing?.initialized_at && ' 最近回零：'+new Date(status.execution.syringe_calibration.last_homing.initialized_at).toLocaleString('zh-CN')}</small></div>}
-    {current?.message && !active && fresh && <p className={'automation-result '+(current.state==='failed'?'is-failed':'')} role="status">{current.state==='failed'?<AlertCircle size={14}/>:<CheckCircle2 size={14}/>}<span>{current.message}</span></p>}
-    {current?.cleanup_failed && <p className="automation-error" role="alert">设备停止回读失败，请现场确认。界面不会将其显示为已安全停止。</p>}
+      {user?.role==='admin'?<>{current?.can_stop && <button className="automation-stop" onClick={stop} disabled={!!pending || current.stop_requested}><Square size={14}/>停止当前实验</button>}{resumable && <button className="outline-button" onClick={restore} disabled={!!pending || !fresh}>恢复未完成流程</button>}<button className="primary-button" onClick={prepare} disabled={!availability.allowed} title={availability.reason}><Play size={15}/>{pending==='prepare'?'后端校验中…':'运行已载入流程'}</button></>:<span className="automation-viewer"><LockKeyhole size={13}/>只读监测</span>}
+    </div></div><p className="automation-control-note">{availability.reason}</p>
+    {current?.message && !active && fresh && <p className={'automation-result '+(current.state==='failed'?'is-failed':'')} role="status"><span>{current.message}</span></p>}
+    {current?.cleanup_failed && <p className="automation-error" role="alert">设备停止回读失败，请现场确认。</p>}
     {notice && <p className="automation-notice" role="status">{notice}</p>}{error && !prepared && <p className="automation-error" role="alert">{error}</p>}
   </section>}
-    {prepared && user?.role==='admin' && <ExecutionConfirmation prepared={prepared} currentSequence={sequence} pending={pending==='start'} error={error} onStart={start} onClose={()=>{setPrepared(null);setCalibration(null);setCellPreparation(null);setError('');}} names={names} blockedReason={availability.allowed?null:availability.reason} calibration={calibration} onCalibrate={calibrate} calibrationBusy={pending==='calibrate'} onStop={stop} canStop={current?.operation==='calibrate_syringe' && current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} cellPreparation={cellPreparation} onDrain={drain} onEmptyConfirm={confirmEmpty} cellBusy={pending==='drain' || pending==='empty'} canStopDrain={current?.operation==='drain_cell' && current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} fresh={fresh}/>}
+    {prepared && user?.role==='admin' && <ExecutionConfirmation key={prepared.run_id} prepared={prepared} currentSequence={sequence} pending={!!pending} error={error} onAdvance={advance} onClose={()=>{preparedRef.current=null;setPrepared(null);setAutomatic(false);setError('');}} names={names} onStop={stop} canStop={current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} fresh={fresh} automatic={automatic}/>}
   </>;
 }

@@ -15,6 +15,7 @@ from unittest.mock import patch
 import test_execution as authorization
 from pump_console.auth import COOKIE_NAME
 from pump_console.repository import LabRepository
+from pump_console.preflight import default_preflight
 
 
 class PseudoPump:
@@ -99,7 +100,7 @@ class LinuxExecutionTests(unittest.TestCase):
         file = self.lab / 'config/templates/peristaltic_1.json'
         template = json.loads(file.read_text()); template['device']['port'] = self.pump.port
         file.write_text(json.dumps(template))
-        self.sequence = {'schema_version': 2, 'id': 'synthetic_automation', 'description': 'Temporary PTY controller verification',
+        self.sequence = {'preflight':default_preflight(),'schema_version': 2, 'id': 'synthetic_automation', 'description': 'Temporary PTY controller verification',
                          'steps': [{'device': 'peristaltic_1', 'operation': 'inject', 'volume_ml': .4, 'fluid': 'water'}]}
 
     def tearDown(self):
@@ -195,8 +196,8 @@ class LinuxExecutionTests(unittest.TestCase):
     def test_function_blocks_execute_in_order_through_the_real_worker_against_only_synthetic_devices(self):
         # These are private PTYs from setUp, never production serial ports.
         action = self.sequence['steps'][0]
-        self.sequence = {key: value for key, value in self.sequence.items() if key != 'steps'}
-        self.sequence.update(schema_version=3, blocks=[
+        self.sequence = {key: value for key, value in self.sequence.items() if key not in ('steps','preflight')}
+        self.sequence.update(schema_version=3, blocks=[default_preflight(),
             {'id': 'first_dose', 'description': 'First synthetic dose', 'steps': [{**action, 'volume_ml': .04}]},
             {'id': 'second_dose', 'description': 'Second synthetic dose', 'steps': [{**action, 'volume_ml': .08}]}])
         prepared = self.start()
@@ -206,7 +207,7 @@ class LinuxExecutionTests(unittest.TestCase):
         journal = self.repo.logs_dir / ('run-'+prepared['run_id']+'.jsonl')
         events = [json.loads(line) for line in journal.read_text().splitlines()]
         started = [event['step'] for event in events if event['event']=='step_started']
-        self.assertEqual([step['id'] for step in started], ['block_001_step_001','block_002_step_001'])
+        self.assertEqual([step['id'] for step in started], ['block_002_step_001','block_003_step_001'])
         self.assertEqual([step['volume_ml'] for step in started], [.04,.08])
         self.assertEqual(self.repo.status()['runtime']['completed_steps'], 2)
 
@@ -330,6 +331,7 @@ class LinuxExecutionTests(unittest.TestCase):
         for name in ('peristaltic_1','peristaltic_2','peristaltic_3'):self.assertEqual(instruments[name].commands, [])
 
     def test_drain_alone_never_authorizes_start_and_duplicate_requests_do_not_repeat_motion(self):
+        self.sequence['preflight']['steps'][1]['route']='waste_2'
         _,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
         body={'run_id':prepared['run_id'],'version':prepared['version'],'route':'waste_2','confirm_discharge':True,'request_id':'unique_drain_one'}
         self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],409)
@@ -355,3 +357,42 @@ class LinuxExecutionTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],409)
         self.assertEqual(self.request('POST','/api/execution/start',{'run_id':prepared['run_id'],'version':prepared['version']})[0],409)
         self.assertEqual(self.pump.commands,[])
+
+    def test_preflight_workflow_homes_drains_pauses_for_operator_and_then_runs_once(self):
+        instruments=self.full_sequence()
+        code,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        self.assertEqual(code,200,prepared)
+        body={'run_id':prepared['run_id'],'version':prepared['version'],'confirm_discharge':True,'empty_confirmed':False}
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['calibration']['state']=='passed')
+        self.assertEqual(instruments['syringe_c'].homing_count,1)
+        for _ in range(3):self.request('GET','/api/execution/preparations/'+prepared['run_id'])
+        self.assertEqual(instruments['peristaltic_2'].commands,[])
+        restored=LabRepository(self.lab,self.root/'data',execution_enabled=True)
+        self.assertEqual(restored.execution.preparation_status(prepared['run_id'])['workflow']['phase'],'ready_to_drain')
+        body['confirm_discharge']=False
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['cell_preparation']['state']=='awaiting_confirmation')
+        self.assertEqual(self.pump.commands,[])
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.assertEqual(instruments['peristaltic_2'].commands.count(0x47),1)
+        body['empty_confirmed']=True
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.wait_for(lambda:self.repo.execution.snapshot()['current']['state']=='completed')
+        self.wait_for(lambda:not self.repo.execution.snapshot()['current']['controller_alive'])
+        self.assertEqual(self.pump.commands.count(0x47),1)
+        self.assertEqual(instruments['syringe_c'].homing_count,1)
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.assertEqual(self.pump.commands.count(0x47),1)
+
+    def test_failed_workflow_homing_stops_the_block_and_never_starts_drain_or_experiment(self):
+        instruments=self.full_sequence();instruments['syringe_c'].homing_error=7
+        code,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        self.assertEqual(code,200,prepared)
+        body={'run_id':prepared['run_id'],'version':prepared['version'],'confirm_discharge':True,'empty_confirmed':False}
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],200)
+        self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['workflow']['phase']=='failed')
+        self.assertEqual(self.request('POST','/api/execution/advance',body)[0],409)
+        self.assertEqual(instruments['syringe_c'].homing_count,1)
+        for name in ('peristaltic_1','peristaltic_2','peristaltic_3','valve'):
+            self.assertEqual(instruments[name].commands,[])

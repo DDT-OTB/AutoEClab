@@ -15,11 +15,16 @@ def _fields(value, allowed, required, label):
 
 
 def validate_block(block, allow_empty=False):
-    _fields(block, {"id", "description", "steps"}, {"id", "description", "steps"}, "功能块")
+    _fields(block, {"id", "description", "steps", "type"}, {"id", "description", "steps"}, "功能块")
     if not isinstance(block['id'], str) or not IDENTIFIER.fullmatch(block['id']):
         raise ValueError("功能块 ID 须为字母开头的英文标识，最多 80 个字符。")
     if not isinstance(block['description'], str):
         raise ValueError("功能块 description 须为文字。")
+    if 'type' in block:
+        if block['type'] != 'preflight':
+            raise ValueError('不支持的功能块类型。')
+        from .preflight import validate_preflight
+        return validate_preflight(block)
     steps = block['steps']
     if not isinstance(steps, list) or len(steps) > MAX_ACTIONS or (not steps and not allow_empty):
         raise ValueError("每个功能块须包含 1 至 1024 个动作。")
@@ -38,13 +43,13 @@ def validate_block(block, allow_empty=False):
 
 
 def import_block(document):
-    _fields(document, {"schema_version", "kind", "id", "description", "steps"},
+    _fields(document, {"schema_version", "kind", "id", "description", "steps", "type"},
             {"schema_version", "kind", "id", "description", "steps"}, "功能块文件")
     if type(document['schema_version']) is not int or document['schema_version'] != 1 or document['kind'] != 'function_block':
         raise ValueError("功能块文件需要 schema_version=1 和 kind=function_block。")
     if re.search(r"[\u3400-\u9fff]", json.dumps(document, ensure_ascii=False)):
         raise ValueError("功能块 JSON 请使用英文。")
-    return deepcopy(validate_block({key: document[key] for key in ('id', 'description', 'steps')}))
+    return deepcopy(validate_block({key: document[key] for key in ('id', 'description', 'steps', 'type') if key in document}))
 
 
 def function_block_templates():
@@ -66,7 +71,7 @@ def flatten_sequence(sequence, allow_empty=False):
     if type(schema) is not int or schema not in (2, 3):
         raise ValueError("实验方案需要 schema_version=2 或 3。")
     if schema == 2:
-        return deepcopy(sequence)
+        return {key: deepcopy(value) for key, value in sequence.items() if key != 'preflight'}
     _fields(sequence, {"schema_version", "id", "description", "notes", "blocks"},
             {"schema_version", "id", "description", "blocks"}, "实验方案")
     if not isinstance(sequence['description'], str):
@@ -82,6 +87,8 @@ def flatten_sequence(sequence, allow_empty=False):
         if block['id'] in ids:
             raise ValueError("同一实验中的功能块 ID 不能重复。")
         ids.add(block['id'])
+        if block.get('type') == 'preflight':
+            continue
         for action_index, action in enumerate(block['steps'], 1):
             # IDs belong to the flattened execution snapshot, independently of reusable block IDs.
             steps.append({**deepcopy(action), 'id': f'block_{block_index:03d}_step_{action_index:03d}'})
@@ -94,6 +101,10 @@ def flatten_sequence(sequence, allow_empty=False):
 def block_ranges(sequence):
     offset, result = 0, []
     for block in sequence.get('blocks', []):
+        if block.get('type') == 'preflight':
+            result.append({'id': block['id'], 'description': block['description'], 'type': 'preflight',
+                           'step_count': 3, 'first_step': None, 'last_step': None})
+            continue
         count = len(block['steps'])
         result.append({'id': block['id'], 'description': block['description'], 'step_count': count,
                        'first_step': offset + 1, 'last_step': offset + count})

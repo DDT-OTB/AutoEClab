@@ -12,6 +12,7 @@ from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
 from .workflow import flatten_sequence
+from .preflight import require_preflight
 
 
 def execute(lab_root, run_directory, run_id, runner_factory=None):
@@ -35,6 +36,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     if snapshot.get('safety_policy') != load_policy():
         raise ValueError('Safety policy changed; prepare the experiment again')
     if operation == 'sequence':
+        require_preflight(snapshot['sequence'], snapshot['safety_policy'])
         require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
         if not job.get('cell_preparation_consumed_at') or not job.get('cell_empty_confirmed_at'):
             raise ValueError('Experiment has no completed drain and operator empty-cell confirmation')

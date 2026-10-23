@@ -11,6 +11,7 @@ import test_api
 from pump_console.auth import COOKIE_NAME
 from pump_console.measurement import measurement_templates
 from pump_console.repository import ApiError, LabRepository
+from pump_console.preflight import default_preflight
 from pump_console.workflow import function_block_templates, import_block
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +116,7 @@ class BlockLibraryTests(unittest.TestCase):
         self.repo.block_library.save(document,'water_rinse',entry['version'])
         self.assertEqual(path.read_bytes(),before)
         self.assertEqual((folder/'snapshot.json').read_bytes(),snapshot)
-        self.assertEqual(sequence['blocks'][0]['steps'][0]['volume_ml'],10)
+        self.assertEqual(sequence['blocks'][1]['steps'][0]['volume_ml'],10)
 
     def test_invalid_action_fields_fluids_volumes_or_cv_parameters_never_persist(self):
         invalid=[{**self.document(),'id':'../outside'},{**self.document(),'description':'中文'},
@@ -133,7 +134,7 @@ class BlockLibraryTests(unittest.TestCase):
         code,saved=self.request('POST','/api/function-blocks',{'block':document})
         self.assertEqual(code,200,saved)
         self.assertEqual(saved['block']['steps'],document['steps'])
-        sequence={'schema_version':3,'id':'missing_route','description':'Route-dependent block', 'blocks':[import_block(document)]}
+        sequence={'schema_version':3,'id':'missing_route','description':'Route-dependent block', 'blocks':[default_preflight(),import_block(document)]}
         self.assertEqual(self.request('POST','/api/preview',{'sequence':sequence})[0],422)
 
     def test_cv_templates_remain_planning_only_and_capacity_is_checked_for_the_combined_experiment(self):
@@ -143,13 +144,13 @@ class BlockLibraryTests(unittest.TestCase):
         code,saved=self.request('POST','/api/function-blocks',{'block':document})
         self.assertEqual(code,200,saved)
         self.repo.execution.enabled=True
-        sequence={'schema_version':3,'id':'cv_blocks','description':'CV draft','blocks':[import_block(document)]}
+        sequence={'schema_version':3,'id':'cv_blocks','description':'CV draft','blocks':[default_preflight(),import_block(document)]}
         code,error=self.request('POST','/api/execution/prepare',{'sequence':sequence})
         self.assertEqual(code,422);self.assertEqual(error['error'],'instrument_not_integrated')
         document['id']='overfull_template'
         document['steps']=[{'device':'peristaltic_1','operation':'inject','fluid':'water','volume_ml':41}]
         self.assertEqual(self.request('POST','/api/function-blocks',{'block':document})[0],200)
-        sequence['blocks']=[import_block(document)]
+        sequence['blocks']=[default_preflight(),import_block(document)]
         code,error=self.request('POST','/api/execution/prepare',{'sequence':sequence})
         self.assertEqual(code,422);self.assertEqual(error['error'],'cell_capacity_exceeded')
 

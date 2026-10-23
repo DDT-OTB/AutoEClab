@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {defaultPreflight} from './preflight.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { cvDuration, cvErrors, cvWaveform, stepSummary } from './cv.js';
@@ -17,7 +18,7 @@ test('measurement defaults come from the JSON template and remain independent wh
   assert.equal(a.volume_ml, undefined);
 });
 test('measurement editing roundtrip preserves English parameters and removes UI-only state', () => {
-  const source = { schema_version: 2, id: 'cv_test', description: 'CV planning test', notes: [],
+  const source = { preflight:defaultPreflight(), schema_version: 2, id: 'cv_test', description: 'CV planning test', notes: [],
     steps: [{ device: template.device_id, operation: 'measure', technique: 'cyclic_voltammetry', parameters: structuredClone(parameters) }] };
   const draft = toEditor(source);
   draft.steps[0].parameters.scan_rate_v_s = .05;

@@ -1,6 +1,7 @@
 import { cvErrors, isMeasurement } from './cv.js';
 import { cellVolumes, defaultSafetyPolicy } from './cellSafety.js';
 import { flattenSequence, workflowSequence, workflowErrors, workflowToEditor, uiKey } from './workflow.js';
+import {preflightErrors} from './preflight.js';
 export { uiKey } from './workflow.js';
 export const fluidLabels = { water: '超纯水', waste_liquid: '废液', sulfuric_acid: '硫酸', electrolyte: '电解液' };
 export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量' };
@@ -13,6 +14,7 @@ export function toSequence(draft) {
   return {
     schema_version: 2, id: draft.id, description: draft.description,
     notes: draft.notes || ['Review this experiment before hardware execution.'],
+    ...(draft.preflight?{preflight:structuredClone(draft.preflight)}:{}),
     steps: draft.steps.map(({ _key, ...step }) => structuredClone(step)),
   };
 }
@@ -36,6 +38,7 @@ export function moveStep(steps, from, to) {
 export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) {
   const errors = [];
   if(draft.blocks) errors.push(...workflowErrors(toSequence(draft)));
+  else errors.push(...preflightErrors(draft));
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(draft.id)) errors.push('方案 ID 请使用字母开头的英文、数字、下划线或短横线。');
   if (/[\u3400-\u9fff]/.test(JSON.stringify(toSequence(draft)))) errors.push('保存的 JSON 内容请使用英文。');
   const flat=flattenSequence(toSequence(draft));

@@ -15,6 +15,7 @@ import threading
 from .repository import ApiError, parse_json
 from .runtime import active_controller, timestamp
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
+from .preflight import require_preflight
 
 ACTIVE_STATES = {"starting", "running", "stopping"}
 TERMINAL_STATES = {"completed", "stopped", "failed"}
@@ -190,7 +191,105 @@ class ExecutionManager:
     def preparation_status(self, run_id):
         with self.lock:
             folder, job = self._job(run_id)
-            return {'run_id': run_id, 'calibration': self._calibration_state(folder, job), 'cell_preparation': self._cell_state(folder, job)}
+            calibration, cell = self._calibration_state(folder, job), self._cell_state(folder, job)
+            result = {'run_id': run_id, 'calibration': calibration, 'cell_preparation': cell}
+            if job.get('operation', 'sequence') == 'sequence':
+                snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+                try:
+                    preflight = require_preflight(snapshot['sequence'], snapshot['safety_policy'])
+                except ValueError:
+                    return {**result, 'workflow': {'phase': 'failed', 'message': '旧准备记录缺少前置功能块，请重新载入方案。', 'needs_advance': False}}
+                plan = snapshot['plan']
+                result.update(version=job['version'], sequence=snapshot['sequence'], operation='sequence',
+                    preview={'plan': plan, 'preflight': preflight, 'safety_policy': snapshot['safety_policy'],
+                             'cell_safety': require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], plan),
+                             'estimated_timed_seconds': sum(step.get('duration_s') or step.get('estimated_movement_s') or step.get('estimated_measurement_s') or 0 for step in plan['steps']),
+                             'warnings': [], 'hardware_executed': False},
+                    workflow=self._workflow_state(folder, job, calibration, cell))
+            return result
+
+    def _workflow_state(self, folder, job, calibration, cell):
+        state = job.get('workflow', {})
+        result = {'authorized': state.get('authorized') is True, 'needs_advance': False}
+        if job['state'] != 'prepared':
+            summary = self._summary(folder, job)
+            return {**result, 'phase': summary['state'], 'main_started': True}
+        if state.get('failed'):
+            return {**result, 'phase': 'failed', 'message': state.get('message')}
+        if not result['authorized']:
+            return {**result, 'phase': 'awaiting_start'}
+        if calibration['required'] and calibration['state'] != 'passed':
+            if calibration['state'] == 'running':
+                return {**result, 'phase': 'homing'}
+            if calibration['state'] != 'required':
+                return {**result, 'phase': 'failed', 'message': calibration.get('message') or '前置回零未通过，请重新准备流程。'}
+            return {**result, 'phase': 'ready_to_home', 'needs_advance': True}
+        if cell['state'] == 'required':
+            return {**result, 'phase': 'ready_to_drain', 'needs_advance': True}
+        if cell['state'] == 'running':
+            return {**result, 'phase': 'draining'}
+        if cell['state'] == 'awaiting_confirmation':
+            return {**result, 'phase': 'awaiting_confirmation'}
+        if cell['state'] == 'passed':
+            return {**result, 'phase': 'ready_to_start'}
+        return {**result, 'phase': 'failed', 'message': cell.get('message') or '前置排空或确认未通过，请重新准备流程。'}
+
+    def advance_workflow(self, run_id, expected_version, actor, confirm_discharge=False, empty_confirmed=False):
+        """Advance one authorized stage. Polling GET requests never call this method."""
+        self._enabled()
+        if type(confirm_discharge) is not bool or type(empty_confirmed) is not bool:
+            raise ApiError(400, 'Invalid workflow acknowledgement')
+        with self.lock:
+            folder, job = self._job(run_id)
+            if job.get('operation', 'sequence') != 'sequence' or job['version'] != expected_version:
+                raise ApiError(409, '流程准备记录不匹配。', 'version_conflict')
+            if job['state'] != 'prepared':
+                return {**self.preparation_status(run_id), 'accepted': True, 'already_started': True}
+            folder, job, snapshot = self._prepared_snapshot(run_id, expected_version)
+            try:
+                preflight = require_preflight(snapshot['sequence'], snapshot['safety_policy'])
+            except ValueError as error:
+                raise ApiError(422, str(error), 'preflight_required') from error
+            workflow = job.get('workflow', {})
+            if workflow.get('failed'):
+                raise ApiError(409, '前置流程已失败，请重新准备，不会自动重试。', 'preflight_failed')
+            if workflow.get('authorized') is not True:
+                if confirm_discharge is not True:
+                    raise ApiError(422, '开始前置功能块前须确认回零与排液条件。', 'discharge_confirmation_required')
+                workflow = {'authorized': True, 'authorized_by': actor, 'authorized_at': datetime.now(timezone.utc).isoformat()}
+                job['workflow'] = workflow
+                write_private(folder / 'job.json', job)
+            status = self.preparation_status(run_id)
+            phase = status['workflow']['phase']
+            try:
+                if empty_confirmed and phase not in ('awaiting_confirmation', 'ready_to_start'):
+                    raise ApiError(409, '排空尚未完成，不能预先确认空池。', 'cell_preparation_required')
+                if phase == 'ready_to_home':
+                    child_id = job.get('calibration_run_id')
+                    if child_id:
+                        _, child = self._job(child_id)
+                        self.start(child_id, child['version'], actor)
+                    else:
+                        self.calibrate(run_id, expected_version, actor, True)
+                elif phase == 'ready_to_drain':
+                    child_id = job.get('cell_drain_run_id')
+                    if child_id:
+                        _, child = self._job(child_id)
+                        self.start(child_id, child['version'], actor)
+                    else:
+                        self.drain_cell(run_id, expected_version, actor, preflight['route'], True, 'workflow_drain')
+                elif phase in ('awaiting_confirmation', 'ready_to_start'):
+                    if empty_confirmed is True:
+                        self.confirm_empty(run_id, expected_version, actor, True)
+                        self.start(run_id, expected_version, actor)
+                elif phase == 'failed':
+                    raise ApiError(409, status['workflow'].get('message') or '前置步骤失败。', 'preflight_failed')
+            except ApiError as error:
+                _, latest = self._job(run_id)
+                latest['workflow'] = {**latest.get('workflow', {}), 'failed': True, 'message': str(error)}
+                write_private(folder / 'job.json', latest)
+                raise
+            return {**self.preparation_status(run_id), 'accepted': True}
 
     def _cell_state(self, folder, job):
         required = job.get('operation', 'sequence') == 'sequence'
@@ -226,6 +325,8 @@ class ExecutionManager:
 
     def _prepared_snapshot(self, run_id, expected_version):
         folder, job = self._job(run_id)
+        if job.get('workflow', {}).get('failed'):
+            raise ApiError(409, '前置流程已失败，请重新准备。', 'preflight_failed')
         if job['state'] != 'prepared' or job['version'] != expected_version:
             raise ApiError(409, '方案准备记录已变化，请重新准备。', 'version_conflict')
         snapshot = parse_json((folder / 'snapshot.json').read_bytes())
@@ -245,6 +346,12 @@ class ExecutionManager:
             raise ApiError(400, 'Invalid drain request ID')
         with self.lock:
             folder, job, snapshot = self._prepared_snapshot(run_id, expected_version)
+            try:
+                preflight = require_preflight(snapshot['sequence'], snapshot['safety_policy'])
+            except ValueError as error:
+                raise ApiError(422, str(error), 'preflight_required') from error
+            if route in snapshot['safety_policy']['cell']['allowed_waste_routes'] and route != preflight['route']:
+                raise ApiError(422, '排液流路必须与前置功能块中设定的流路一致。', 'preflight_route_mismatch')
             status = self._cell_state(folder, job)
             previous = job.get('cell_drain_requests', {}).get(request_id)
             if previous:
@@ -255,7 +362,7 @@ class ExecutionManager:
                 raise ApiError(409, '本次排空正在执行，请等待完成。', 'execution_busy')
             try:
                 sequence = drain_sequence(snapshot['safety_policy'], route)
-                preview = self.repository.preview(sequence, _templates=(snapshot['devices'], snapshot['templates']))
+                preview = self.repository.preview(sequence, _templates=(snapshot['devices'], snapshot['templates']), _internal_drain=True)
             except ValueError as error:
                 raise ApiError(422, str(error), 'invalid_waste_route') from error
             if preview['plan']['unresolved'] or not preview['plan']['ready_for_hardware']:
@@ -288,6 +395,8 @@ class ExecutionManager:
             raise ApiError(422, '请先确认管路允许机械回零排液。', 'discharge_confirmation_required')
         with self.lock:
             folder, job = self._job(run_id)
+            if job.get('workflow', {}).get('failed'):
+                raise ApiError(409, '前置流程已失败，请重新准备。', 'preflight_failed')
             if job['version'] != expected_version or job['state'] != 'prepared':
                 raise ApiError(409, '方案准备记录已变化，请重新准备。', 'version_conflict')
             calibration = self._calibration_state(folder, job)
@@ -296,6 +405,10 @@ class ExecutionManager:
             if calibration['state'] in ('running', 'passed'):
                 return {'run_id': run_id, 'accepted': True, 'already_started': True, 'calibration': calibration}
             snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+            try:
+                require_preflight(snapshot['sequence'], snapshot['safety_policy'])
+            except ValueError as error:
+                raise ApiError(422, str(error), 'preflight_required') from error
             if snapshot.get('safety_policy') != load_policy():
                 raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
             if version(snapshot) != expected_version or version(self._templates()[1]) != job['templates_version']:
@@ -373,6 +486,8 @@ class ExecutionManager:
         self._enabled()
         with self.lock:
             folder, job = self._job(run_id)
+            if job.get('workflow', {}).get('failed'):
+                raise ApiError(409, '前置流程已失败，请重新准备。', 'preflight_failed')
             if not isinstance(expected_version, str) or expected_version != job['version']:
                 raise ApiError(409, '准备版本不匹配，请重新检查方案。', 'version_conflict')
             current_folder, current = self._current()
@@ -396,6 +511,10 @@ class ExecutionManager:
             if snapshot.get('safety_policy') != load_policy():
                 raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
             if snapshot.get('operation', 'sequence') == 'sequence':
+                try:
+                    require_preflight(snapshot['sequence'], snapshot['safety_policy'])
+                except ValueError as error:
+                    raise ApiError(422, str(error), 'preflight_required') from error
                 require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
             self._check_ports(snapshot['devices'], snapshot['plan'])
             calibration = self._calibration_state(folder, job)
