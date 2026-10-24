@@ -37,9 +37,11 @@ test('new diagram places the selector on the syringe inlet and draws only one wa
 });
 test('CV graphs are embedded inside the workstation status details',()=>{
   const metadata={id:'cv-'+'b'.repeat(32),sequence_id:'synthetic',step_id:'cv',state:'completed',point_count:2,sample_count:200,stop_confirmed:true};
-  const html=render(Monitor,{items,selectedItem:items.find(item=>item.id==='electrochemical_station'),fresh:true,role:'admin',measurement:{metadata,points:[[1,1,0,0],[2,2,.1,1e-6]]}});
+  const points=[[1,1,0,0],[2,2,.1,1e-6]];
+  const html=render(Monitor,{items,selectedItem:items.find(item=>item.id==='electrochemical_station'),fresh:true,role:'admin',measurement:{metadata,points,trend_segments:[points]}});
   assert.match(html,/设备状态详情/);assert.match(html,/电化学工作站测量数据/);
   assert.match(html,/CV 曲线/);assert.match(html,/时间—电流/);
+  assert.match(html,/data-trace="full-data-trend"/);
   assert.doesNotMatch(html,/class="measurement-results"/);
 });
 test('inlet workflows require explicit matching fluid selection while direct drains need no selector',()=>{

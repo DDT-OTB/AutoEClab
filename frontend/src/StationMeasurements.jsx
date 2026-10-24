@@ -18,7 +18,7 @@ export default function StationMeasurements({measurement,fresh,onOpen,active=fal
       {!fresh && ['starting','running'].includes(data.state) && <p className="measurement-warning">连接待恢复，保留最后接收数据。</p>}
       {data.message && data.state==='failed' && <p className="measurement-warning">{data.message}</p>}
       <div className="station-chart-tabs" role="tablist" aria-label="工作站测量图形"><button type="button" role="tab" aria-selected={view==='cv'} onClick={()=>setView('cv')}>CV 曲线</button><button type="button" role="tab" aria-selected={view==='time'} onClick={()=>setView('time')}>时间—电流</button></div>
-      <TraceChart points={points} kind={view} title={view==='cv'?'电位—电流':'时间—电流'} exportName={data.id}/>
+      <TraceChart points={points} trendSegments={measurement?.trend_segments} kind={view} title={view==='cv'?'电位—电流':'时间—电流'} exportName={data.id}/>
       <p className="measurement-data-note">电位由 DAC CODE 换算，并非独立实测电极电压；电流为名义值。每点为 100 个 ADC 样本均值，当前显示 {points.length} / {data.point_count} 个均值点，按采集顺序均匀覆盖全程并保留极值。</p>
       <div className="station-data-footer"><span>{data.stop_confirmed?'停止回读已确认':['starting','running'].includes(data.state)?'数据自动保存中':'停止回读待确认'}</span>{onOpen && <button type="button" className="subtle-button" onClick={()=>onOpen(data.id)}>数据管理<ArrowUpRight size={13}/></button>}</div>
     </>:<div className="station-data-empty"><strong>等待测量数据</strong><p>在实验方案中设置 CV 参数，运行后会在此显示曲线和采集状态。</p></div>}

@@ -190,7 +190,7 @@ def make_server(host, port, repository, static_root, auth, access=None):
                                                        chart=repository.measurements.points(parts[0])))
                 if len(parts) == 2 and parts[1] == 'points':
                     q = options({'limit'})
-                    return self.json_response(200, repository.measurements.points(parts[0], int(q.get('limit', '1800'))))
+                    return self.json_response(200, repository.measurements.points(parts[0], int(q.get('limit', '3000'))))
                 if len(parts) == 2 and parts[1] == 'download':
                     q = options({'format'})
                     file, filename = repository.measurements.download(parts[0], q.get('format', 'csv'))

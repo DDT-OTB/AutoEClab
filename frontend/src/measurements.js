@@ -25,6 +25,54 @@ export function displayTrend(data=[],kind='cv',window=7) {
     return {...point,y:selected.reduce((sum,value)=>sum+value.y,0)/selected.length};
   }));
 }
+export function smoothPath(points=[]) {
+  if(!points.length)return '';
+  const position=point=>`${point.x.toFixed(3)},${point.y.toFixed(3)}`;
+  const path=[`M${position(points[0])}`];
+  function appendRun(run) {
+    if(run.length<2)return;
+    const h=run.slice(1).map((point,i)=>Math.abs(point.x-run[i].x));
+    const slope=run.slice(1).map((point,i)=>(point.y-run[i].y)/h[i]);
+    const tangent=Array(run.length).fill(0);
+    const endpoint=(a,b,ha,hb)=>{
+      const value=((2*ha+hb)*a-ha*b)/(ha+hb);
+      return Math.sign(value)!==Math.sign(a)?0:Math.sign(a)*Math.min(Math.abs(value),3*Math.abs(a));
+    };
+    if(run.length===2)tangent[0]=tangent[1]=slope[0];
+    else {
+      tangent[0]=endpoint(slope[0],slope[1],h[0],h[1]);
+      tangent[run.length-1]=endpoint(slope.at(-1),slope.at(-2),h.at(-1),h.at(-2));
+      for(let i=1;i<run.length-1;i++) {
+        const a=slope[i-1],b=slope[i];
+        if(a*b>0) {
+          const w1=2*h[i]+h[i-1],w2=h[i]+2*h[i-1];
+          tangent[i]=(w1+w2)/(w1/a+w2/b);
+        }
+      }
+    }
+    for(let i=0;i<run.length-1;i++) {
+      const a=run[i],b=run[i+1],dx=(b.x-a.x)/3;
+      const lo=Math.min(a.y,b.y),hi=Math.max(a.y,b.y);
+      const clamp=value=>Math.max(lo,Math.min(hi,value));
+      // Bounded Bezier controls prevent interpolation from adding new peaks.
+      const c1={x:a.x+dx,y:clamp(a.y+tangent[i]*h[i]/3)};
+      const c2={x:b.x-dx,y:clamp(b.y-tangent[i+1]*h[i]/3)};
+      path.push(`C${position(c1)} ${position(c2)} ${position(b)}`);
+    }
+  }
+  let run=[points[0]],direction=0;
+  for(let i=1;i<points.length;i++) {
+    const previous=points[i-1],point=points[i],step=Math.sign(point.x-previous.x);
+    if(!step || (direction && step!==direction)) {
+      appendRun(run);
+      if(!step)path.push(`L${position(point)}`);
+      run=step?[previous,point]:[point];
+    }else run.push(point);
+    direction=step || 0;
+  }
+  appendRun(run);
+  return path.join(' ');
+}
 export function chartDomain(values) {
   values=values.filter(Number.isFinite);
   if(!values.length)return [0,1];

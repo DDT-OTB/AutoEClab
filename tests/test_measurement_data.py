@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from pump_console.measurement_store import MeasurementStore, MeasurementBusyError, MeasurementConflictError, StreamingTrace,thin_points,CHART_SAMPLER
+from pump_console.measurement_store import MeasurementStore, MeasurementBusyError, MeasurementConflictError, StreamingTrace, StreamingTrend,thin_points,CHART_SAMPLER,CHART_POINT_LIMIT,TREND_METHOD
 import test_api
 
 
@@ -51,7 +51,9 @@ class DatasetTests(unittest.TestCase):
         writer = self.writer(); writer.append(synthetic_rows()); writer.publish(force=True, state='running')
         latest = self.store.latest()
         self.assertEqual(latest['metadata']['point_count'], 100)
-        self.assertLessEqual(len(latest['points']), 1800)
+        self.assertLessEqual(len(latest['points']), CHART_POINT_LIMIT)
+        self.assertEqual(latest['trend_method'], TREND_METHOD)
+        self.assertTrue(latest['trend_segments'])
         with self.assertRaises(ValueError): self.store.download(writer.metadata['id'], 'csv')
         self.assertTrue(self.store.download(writer.metadata['id'], 'json')[0].exists())
 
@@ -67,13 +69,48 @@ class DatasetTests(unittest.TestCase):
         values=[[i+1,i/1000,math.sin(i/1500),1000 if i==100 else -500 if i==50000 else math.sin(i/733)] for i in range(60000)]
         sampler=StreamingTrace()
         for start in range(0,len(values),137):sampler.append(values[start:start+137])
-        points=sampler.points();self.assertLessEqual(len(points),1800)
+        points=sampler.points();self.assertLessEqual(len(points),CHART_POINT_LIMIT)
         self.assertEqual(points[0],values[0]);self.assertEqual(points[-1],values[-1])
         self.assertIn(values[100],points);self.assertIn(values[50000],points)
         for section in range(3):
             self.assertGreater(sum(section*20000<p[0]<=(section+1)*20000 for p in points),len(points)*.2)
         self.assertTrue(all(point==values[point[0]-1] for point in points))
-        self.assertLessEqual(len(sampler.buckets),300)
+        self.assertLessEqual(len(sampler.buckets),CHART_POINT_LIMIT//6)
+
+    def test_trend_averages_all_original_points_instead_of_extrema_samples(self):
+        values=[[i+1,i/1000,i/10000,100 if i%50==0 else 0] for i in range(12000)]
+        trend=StreamingTrend(bucket_limit=100)
+        for start in range(0,len(values),137):trend.append(values[start:start+137])
+        chart=trend.chart();self.assertEqual(chart['trend_method'],TREND_METHOD)
+        self.assertEqual(len(chart['trend_segments']),1)
+        segment=chart['trend_segments'][0]
+        self.assertEqual(segment[0],values[0]);self.assertEqual(segment[-1],values[-1])
+        for point in segment[1:-1]:
+            bucket=int((point[0]-1)//trend.width)
+            original=values[bucket*trend.width:(bucket+1)*trend.width]
+            self.assertAlmostEqual(point[3],sum(p[3] for p in original)/len(original))
+        self.assertLess(max(point[3] for point in segment[1:-1]),4)
+        self.assertTrue(all(point[1] in {p[1] for p in values} for point in segment))
+        one=StreamingTrend(bucket_limit=100);one.append(values)
+        self.assertEqual(one.chart(),chart)
+        self.assertLessEqual(len(trend.buckets),100)
+
+    def test_trend_keeps_turnaround_anchors_and_never_averages_across_branches(self):
+        values=[[1,1,-1,1],[2,1,0,1],[3,1,1,1],[4,1,0,10],[5,1,-1,10]]
+        trend=StreamingTrend(bucket_limit=1);trend.append(values)
+        segments=trend.chart()['trend_segments']
+        self.assertEqual(len(segments),2)
+        self.assertEqual(segments[0][-1],values[2]);self.assertEqual(segments[1][0],values[2])
+        self.assertTrue(all(point[3]==1 for point in segments[0]))
+        self.assertTrue(all(point[3]==10 for point in segments[1][1:]))
+        self.assertTrue(all(point[1]==1 for segment in segments for point in segment))
+
+    def test_pathologically_reversing_potentials_disable_only_bounded_display_trend(self):
+        trend=StreamingTrend(bucket_limit=24)
+        trend.append([[i,i,float(i%2),0] for i in range(4000)])
+        self.assertEqual(trend.chart()['trend_unavailable_reason'],'too_many_potential_reversals')
+        self.assertEqual(trend.chart()['trend_segments'],[])
+        self.assertFalse(trend.buckets);self.assertFalse(trend.ends)
 
     def test_old_terminal_snapshot_is_rebuilt_once_without_changing_original_data(self):
         writer=self.writer()
@@ -94,9 +131,12 @@ class DatasetTests(unittest.TestCase):
                 yield db
         with patch.object(self.store,'db',tracked):
             one=self.store.latest();two=self.store.latest()
-        self.assertGreater(len(one['points']),100);self.assertEqual(one['points'],two['points'])
+        self.assertGreater(len(one['points']),len(self.store.points(writer.metadata['id'],1800)['points']))
+        self.assertEqual(one['points'],two['points'])
         self.assertEqual(len(queries),1)
         self.assertEqual(one['points'],self.store.points(writer.metadata['id'])['points'])
+        self.assertEqual(one['trend_segments'],self.store.points(writer.metadata['id'])['trend_segments'])
+        self.assertEqual(one['trend_method'],TREND_METHOD)
         self.assertEqual(path.read_bytes(),old_snapshot)
         self.assertEqual((writer.folder/'points.csv').read_bytes(),csv)
         self.assertEqual((writer.folder/'metadata.json').read_bytes(),metadata)
@@ -188,6 +228,10 @@ class MeasurementDataApiTests(unittest.TestCase):
         code, detail = self.request('GET', '/api/measurements/' + self.dataset)
         self.assertEqual(code, 200); self.assertEqual(detail['measurement']['point_count'], 100)
         self.assertTrue(detail['chart']['points'])
+        self.assertTrue(detail['chart']['trend_segments'])
+        self.assertEqual(detail['chart']['trend_method'],TREND_METHOD)
+        code,chart=self.request('GET','/api/measurements/'+self.dataset+'/points')
+        self.assertEqual(code,200);self.assertEqual(chart['trend_segments'],detail['chart']['trend_segments'])
         code, content = self.request('GET', '/api/measurements/' + self.dataset + '/download?format=csv')
         self.assertEqual(code, 200); self.assertIn('potential_v_nominal', content)
 

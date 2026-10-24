@@ -21,6 +21,8 @@ POINT_COLUMNS = ['index', 'time_s', 'potential_v', 'current_a']
 CSV_COLUMNS = ['index', 'received_elapsed_s', 'potential_v_nominal', 'current_a_nominal',
                'adc_mean_code', 'dac_code', 'sensitivity', 'current_gain', 'dac_vref_mv', 'sample_count']
 CHART_SAMPLER = 'uniform_index_extrema_v1'
+CHART_POINT_LIMIT = 3000
+TREND_METHOD = 'full_data_branch_bucket_mean_v1'
 
 
 class MeasurementBusyError(ValueError):
@@ -57,7 +59,7 @@ def private_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def thin_points(points, limit=1800):
+def thin_points(points, limit=CHART_POINT_LIMIT):
     """Preserve order, endpoints, and E/I extrema; never invent chart points."""
     if len(points) <= limit:
         return points
@@ -76,7 +78,7 @@ def thin_points(points, limit=1800):
 
 class StreamingTrace:
     """Equal-width index buckets retain extrema without reweighting old samples."""
-    def __init__(self, limit=1800):
+    def __init__(self, limit=CHART_POINT_LIMIT):
         self.bucket_limit=max(1,limit//6)
         self.width,self.count,self.buckets=1,0,{}
 
@@ -105,6 +107,82 @@ class StreamingTrace:
             unique={point[0]:point for point in self.buckets[index]}
             result.extend(list(unique[key]) for key in sorted(unique))
         return result
+
+
+class StreamingTrend:
+    """Display-only means of all samples, split before averaging at CV reversals.
+
+    Equal acquisition-index buckets carry sums and counts through every merge.
+    Extrema-selected scatter points are never used to estimate these means.
+    Pathologically many reversals disable the trend rather than growing memory.
+    """
+    def __init__(self, bucket_limit=CHART_POINT_LIMIT):
+        self.bucket_limit = bucket_limit
+        self.width, self.count, self.branch, self.direction = 1, 0, 0, 0
+        self.previous = None
+        self.buckets, self.ends = {}, {}
+        self.disabled = False
+
+    def append(self, points):
+        if self.disabled:
+            return
+        for point in points:
+            if self.previous is not None:
+                delta = point[2] - self.previous[2]
+                direction = (delta > 0) - (delta < 0)
+                if direction and self.direction and direction != self.direction:
+                    self.branch += 1
+                    if self.branch >= 1024:
+                        self.disabled = True
+                        self.buckets.clear(); self.ends.clear()
+                        return
+                    self.ends[self.branch] = [self.previous, point]
+                if direction:
+                    self.direction = direction
+            if self.branch not in self.ends:
+                self.ends[self.branch] = [point, point]
+            self.ends[self.branch][1] = point
+            while self.count // self.width >= self.bucket_limit:
+                merged = {}
+                for (index, branch), summary in self.buckets.items():
+                    key = (index // 2, branch)
+                    if key in merged:
+                        old = merged[key]
+                        last = summary if summary[5] > old[5] else old
+                        merged[key] = [old[0] + summary[0], last[1], old[2] + summary[2],
+                                       old[3] + summary[3], old[4] + summary[4], last[5]]
+                    else:
+                        merged[key] = summary
+                self.width *= 2
+                self.buckets = merged
+            key = (self.count // self.width, self.branch)
+            if key not in self.buckets:
+                self.buckets[key] = [*point, 1, point[0]]
+            else:
+                summary = self.buckets[key]
+                for field in (0, 2, 3):
+                    summary[field] += point[field]
+                summary[1], summary[5] = point[1], point[0]
+                summary[4] += 1
+            self.count += 1
+            self.previous = point
+
+    def chart(self):
+        if self.disabled:
+            return dict(trend_segments=[], trend_method=TREND_METHOD,
+                        trend_unavailable_reason='too_many_potential_reversals')
+        groups = {branch: [] for branch in self.ends}
+        for (_, branch), summary in sorted(self.buckets.items()):
+            groups[branch].append([summary[0] / summary[4], summary[1],
+                                   summary[2] / summary[4], summary[3] / summary[4]])
+        segments = []
+        for branch, points in groups.items():
+            first, last = self.ends[branch]
+            # Actual turnaround points anchor both adjacent branches. Interior
+            # trend values are explicitly derived means, not acquired samples.
+            segments.append([list(first), *[point for point in points if first[0] < point[0] < last[0]],
+                             *([list(last)] if first[0] != last[0] else [])])
+        return dict(trend_segments=segments, trend_method=TREND_METHOD)
 
 
 class MeasurementStore:
@@ -201,7 +279,7 @@ class MeasurementStore:
         return dict(measurements=[with_version(json.loads(row['metadata'])) for row in rows], total=count,
                     next_offset=offset + limit if offset + limit < count else None)
 
-    def points(self, dataset_id, limit=1800):
+    def points(self, dataset_id, limit=CHART_POINT_LIMIT):
         metadata = self.get(dataset_id)
         if type(limit) is not int or not 24 <= limit <= 10000:
             raise ValueError('Chart point limit must be between 24 and 10000')
@@ -211,7 +289,8 @@ class MeasurementStore:
             return dict(points=thin_points(snapshot['points'], limit), point_columns=POINT_COLUMNS,
                         total_points=snapshot['point_count'], updated_at=snapshot['updated_at'],
                         decimated=snapshot['point_count'] > len(snapshot['points']),
-                        sampling=snapshot.get('sampling','legacy_snapshot'))
+                        sampling=snapshot.get('sampling','legacy_snapshot'),
+                        **{key: snapshot[key] for key in ('trend_segments', 'trend_method', 'trend_unavailable_reason') if key in snapshot})
         cache_key=(dataset_id,metadata['updated_at'],metadata['point_count'],limit)
         with self._chart_lock:
             cached=self._chart_cache.get(cache_key)
@@ -221,17 +300,21 @@ class MeasurementStore:
         count = metadata['point_count']
         width = max(1, math.ceil(count / max(1, limit // 6)))
         result, group = [], []
+        trend = StreamingTrend(bucket_limit=min(limit, CHART_POINT_LIMIT))
         with self.db() as db:
             cursor = db.execute('SELECT point_index,time_s,potential_v,current_a FROM points WHERE dataset_id=? ORDER BY point_index', (dataset_id,))
             for row in cursor:
-                group.append(list(row))
+                point = list(row)
+                trend.append([point])
+                group.append(point)
                 if len(group) >= width:
                     result.extend(thin_points(group, 6)); group = []
             if group:
                 result.extend(thin_points(group, 6))
         displayed=thin_points(result, limit)
         chart=dict(points=displayed, point_columns=POINT_COLUMNS,total_points=count,
-                   updated_at=metadata['updated_at'],decimated=count>len(displayed),sampling=CHART_SAMPLER)
+                   updated_at=metadata['updated_at'],decimated=count>len(displayed),sampling=CHART_SAMPLER,
+                   **trend.chart())
         with self._chart_lock:
             self._chart_cache[cache_key]=deepcopy(chart)
             while len(self._chart_cache)>8:self._chart_cache.popitem(last=False)
@@ -247,14 +330,16 @@ class MeasurementStore:
             try:chart=self.points(metadata['id'])
             except FileNotFoundError:return None
             return dict(metadata=metadata,points=chart['points'],point_columns=POINT_COLUMNS,
-                        total_points=chart['total_points'],sampling=chart['sampling'])
+                        total_points=chart['total_points'],sampling=chart['sampling'],
+                        **{key: chart[key] for key in ('trend_segments', 'trend_method', 'trend_unavailable_reason') if key in chart})
         live = self.folder(metadata['id']) / 'live.json'
         points = None
         if live.is_file() and not live.is_symlink():
             points = json.loads(live.read_text())
         return dict(metadata=metadata, points=points['points'] if points else [],
                     point_columns=POINT_COLUMNS, total_points=points['point_count'] if points else metadata['point_count'],
-                    sampling=points.get('sampling','legacy_snapshot') if points else CHART_SAMPLER)
+                    sampling=points.get('sampling','legacy_snapshot') if points else CHART_SAMPLER,
+                    **{key: points[key] for key in ('trend_segments', 'trend_method', 'trend_unavailable_reason') if points and key in points})
 
     def download(self, dataset_id, kind):
         metadata = self.get(dataset_id)
@@ -387,7 +472,9 @@ class DatasetWriter:
             db.executemany('INSERT INTO points VALUES (?,?,?,?,?)',
                            [(self.metadata['id'], *point) for point in points])
         if not hasattr(self,'sampler'):self.sampler=StreamingTrace()
+        if not hasattr(self,'trend'):self.trend=StreamingTrend()
         self.sampler.append(points)
+        self.trend.append(points)
         self.publish()
 
     def publish(self, force=False, **fields):
@@ -405,7 +492,8 @@ class DatasetWriter:
                        (self.metadata['state'], raw, self.metadata['id']))
         private_json(self.folder / 'metadata.json', self.metadata)
         private_json(self.folder / 'live.json', dict(points=self.trace,
-            point_count=self.metadata['point_count'], updated_at=self.metadata['updated_at'],sampling=CHART_SAMPLER))
+            point_count=self.metadata['point_count'], updated_at=self.metadata['updated_at'],sampling=CHART_SAMPLER,
+            **(self.trend.chart() if hasattr(self,'trend') else dict(trend_segments=[],trend_method=TREND_METHOD))))
 
     def finish(self, state, stop_confirmed=False, message=None, **fields):
         try:
