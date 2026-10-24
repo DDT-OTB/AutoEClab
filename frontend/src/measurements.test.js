@@ -4,7 +4,7 @@ import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {chartData,chartDomain} from './measurements.js';
+import {chartData,chartDomain,displayTrend} from './measurements.js';
 import {automationAvailability} from './automation.js';
 import {workspacePage} from './workspace.js';
 import {createApi} from './api.js';
@@ -25,6 +25,15 @@ test('CV and current-time charts use correct units and retain acquisition order'
   assert.deepEqual(chartData(null),[]);
   assert.deepEqual(chartDomain([NaN,Infinity]),[0,1]);
   assert.ok(chartDomain([1,1])[0]<1);
+});
+test('display smoothing never mutates data, reorders potentials or averages across scan reversals',()=>{
+  const input=chartData([[1,1,-.1,1e-6],[2,2,0,1e-6],[3,3,.1,1e-6],[4,4,0,10e-6],[5,5,-.1,10e-6]]);
+  const before=structuredClone(input),trend=displayTrend(input,'cv',3);
+  assert.deepEqual(input,before);
+  assert.equal(trend[0].y,1);assert.equal(trend[1].y,1);
+  assert.equal(trend.at(-1).y,10);
+  assert.deepEqual(trend.map(p=>p.index),[1,2,3,3,4,5]);
+  assert.deepEqual(displayTrend([]),[]);
 });
 test('measurement results show both actual-data charts with provenance and stop status',()=>{
   const html=render(Charts,{metadata,points});

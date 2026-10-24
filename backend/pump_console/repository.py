@@ -90,7 +90,7 @@ class LabRepository:
     def health(self):
         from .syringe_batch import load_policy as syringe_policy
         return {
-            "ok": True, "service": "pump-console", "version": "0.15.3",
+            "ok": True, "service": "pump-console", "version": "0.15.4",
             "syringe_max_stroke_volume_ml": syringe_policy()['max_stroke_volume_ml'],
             "syringe_multi_stroke_supported": True,
             "syringe_homing_requires_verified_water": True,

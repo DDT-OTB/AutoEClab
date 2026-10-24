@@ -7,6 +7,24 @@ export function chartData(points=[],kind='cv') {
   return points.filter(point=>Array.isArray(point) && point.length>=4 && point.slice(0,4).every(Number.isFinite))
     .map(point=>({index:point[0],x:kind==='cv'?point[2]:point[1],y:point[3]*1e6,time:point[1],potential:point[2]}));
 }
+export function displayTrend(data=[],kind='cv',window=7) {
+  if(!data.length)return [];
+  const groups=[];let group=[data[0]],direction=0;
+  for(let index=1;index<data.length;index++) {
+    const step=Math.sign(data[index].potential-data[index-1].potential);
+    if(kind==='cv' && step && direction && step!==direction) {
+      groups.push(group);group=[data[index-1]];
+    }
+    group.push(data[index]);if(step)direction=step;
+  }
+  groups.push(group);
+  const radius=Math.floor(window/2);
+  return groups.flatMap(points=>points.map((point,index)=>{
+    if(index===0 || index===points.length-1)return {...point};
+    const selected=points.slice(Math.max(0,index-radius),Math.min(points.length,index+radius+1));
+    return {...point,y:selected.reduce((sum,value)=>sum+value.y,0)/selected.length};
+  }));
+}
 export function chartDomain(values) {
   values=values.filter(Number.isFinite);
   if(!values.length)return [0,1];

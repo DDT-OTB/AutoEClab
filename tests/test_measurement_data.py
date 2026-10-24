@@ -4,10 +4,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import math
+from contextlib import contextmanager
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from pump_console.measurement_store import MeasurementStore, MeasurementBusyError, MeasurementConflictError, thin_points
+from pump_console.measurement_store import MeasurementStore, MeasurementBusyError, MeasurementConflictError, StreamingTrace,thin_points,CHART_SAMPLER
 import test_api
 
 
@@ -60,6 +62,44 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(thin[0], values[0]); self.assertEqual(thin[-1], values[-1])
         self.assertIn(values[100], thin); self.assertIn(values[200], thin)
         self.assertEqual([p[0] for p in thin], sorted(p[0] for p in thin))
+
+    def test_streaming_sampling_preserves_early_middle_and_late_history_and_extrema(self):
+        values=[[i+1,i/1000,math.sin(i/1500),1000 if i==100 else -500 if i==50000 else math.sin(i/733)] for i in range(60000)]
+        sampler=StreamingTrace()
+        for start in range(0,len(values),137):sampler.append(values[start:start+137])
+        points=sampler.points();self.assertLessEqual(len(points),1800)
+        self.assertEqual(points[0],values[0]);self.assertEqual(points[-1],values[-1])
+        self.assertIn(values[100],points);self.assertIn(values[50000],points)
+        for section in range(3):
+            self.assertGreater(sum(section*20000<p[0]<=(section+1)*20000 for p in points),len(points)*.2)
+        self.assertTrue(all(point==values[point[0]-1] for point in points))
+        self.assertLessEqual(len(sampler.buckets),300)
+
+    def test_old_terminal_snapshot_is_rebuilt_once_without_changing_original_data(self):
+        writer=self.writer()
+        for begin in range(0,12000,200):
+            writer.append([dict(time_s=i/1000,potential_v=math.sin(i/300),current_a=math.sin(i/201)*1e-6) for i in range(begin,begin+200)])
+        writer.finish('completed',stop_confirmed=True)
+        current=self.store.latest();self.assertEqual(current['sampling'],CHART_SAMPLER)
+        path=writer.folder/'live.json';legacy=json.loads(path.read_text())
+        legacy.pop('sampling');legacy['points']=[legacy['points'][0],legacy['points'][-1]]
+        path.write_text(json.dumps(legacy));old_snapshot=path.read_bytes()
+        csv=(writer.folder/'points.csv').read_bytes();metadata=(writer.folder/'metadata.json').read_bytes()
+        self.store=MeasurementStore(self.tmp.name)
+        queries=[];original=self.store.db
+        @contextmanager
+        def tracked():
+            with original() as db:
+                db.set_trace_callback(lambda sql:queries.append(sql) if sql.startswith('SELECT point_index,') else None)
+                yield db
+        with patch.object(self.store,'db',tracked):
+            one=self.store.latest();two=self.store.latest()
+        self.assertGreater(len(one['points']),100);self.assertEqual(one['points'],two['points'])
+        self.assertEqual(len(queries),1)
+        self.assertEqual(one['points'],self.store.points(writer.metadata['id'])['points'])
+        self.assertEqual(path.read_bytes(),old_snapshot)
+        self.assertEqual((writer.folder/'points.csv').read_bytes(),csv)
+        self.assertEqual((writer.folder/'metadata.json').read_bytes(),metadata)
 
     def test_query_paging_and_literal_wildcards(self):
         one = self.writer('first_run'); one.finish('completed')

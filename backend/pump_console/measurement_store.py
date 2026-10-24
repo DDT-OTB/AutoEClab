@@ -1,5 +1,7 @@
 """Private CV datasets, durable block means, and bounded chart snapshots."""
 from contextlib import contextmanager
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime, timezone
 import csv
 import fcntl
@@ -12,11 +14,13 @@ import re
 import secrets
 import sqlite3
 import time
+import threading
 
 DATASET_ID = re.compile(r'cv-[a-f0-9]{32}')
 POINT_COLUMNS = ['index', 'time_s', 'potential_v', 'current_a']
 CSV_COLUMNS = ['index', 'received_elapsed_s', 'potential_v_nominal', 'current_a_nominal',
                'adc_mean_code', 'dac_code', 'sensitivity', 'current_gain', 'dac_vref_mv', 'sample_count']
+CHART_SAMPLER = 'uniform_index_extrema_v1'
 
 
 class MeasurementBusyError(ValueError):
@@ -70,12 +74,46 @@ def thin_points(points, limit=1800):
     return result
 
 
+class StreamingTrace:
+    """Equal-width index buckets retain extrema without reweighting old samples."""
+    def __init__(self, limit=1800):
+        self.bucket_limit=max(1,limit//6)
+        self.width,self.count,self.buckets=1,0,{}
+
+    @staticmethod
+    def merge(left,right):
+        return [min(left[0],right[0],key=lambda p:p[0]),max(left[1],right[1],key=lambda p:p[0]),
+                min(left[2],right[2],key=lambda p:p[2]),max(left[3],right[3],key=lambda p:p[2]),
+                min(left[4],right[4],key=lambda p:p[3]),max(left[5],right[5],key=lambda p:p[3])]
+
+    def append(self,points):
+        for point in points:
+            while self.count//self.width>=self.bucket_limit:
+                merged={}
+                for index,bucket in self.buckets.items():
+                    target=index//2
+                    merged[target]=self.merge(merged[target],bucket) if target in merged else bucket
+                self.width*=2;self.buckets=merged
+            index=self.count//self.width
+            item=[point]*6
+            self.buckets[index]=self.merge(self.buckets[index],item) if index in self.buckets else item
+            self.count+=1
+
+    def points(self):
+        result=[]
+        for index in sorted(self.buckets):
+            unique={point[0]:point for point in self.buckets[index]}
+            result.extend(list(unique[key]) for key in sorted(unique))
+        return result
+
+
 class MeasurementStore:
     def __init__(self, data_root):
         self.root = Path(data_root).resolve() / 'measurements'
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
         self.database = self.root / 'index.sqlite3'
+        self._chart_cache=OrderedDict();self._chart_lock=threading.Lock()
         with self.db() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS datasets (
@@ -172,7 +210,13 @@ class MeasurementStore:
             snapshot = json.loads(live.read_text())
             return dict(points=thin_points(snapshot['points'], limit), point_columns=POINT_COLUMNS,
                         total_points=snapshot['point_count'], updated_at=snapshot['updated_at'],
-                        decimated=snapshot['point_count'] > len(snapshot['points']))
+                        decimated=snapshot['point_count'] > len(snapshot['points']),
+                        sampling=snapshot.get('sampling','legacy_snapshot'))
+        cache_key=(dataset_id,metadata['updated_at'],metadata['point_count'],limit)
+        with self._chart_lock:
+            cached=self._chart_cache.get(cache_key)
+            if cached is not None:
+                self._chart_cache.move_to_end(cache_key);return deepcopy(cached)
         # Bound memory while retaining early/late points and extrema for every time bucket.
         count = metadata['point_count']
         width = max(1, math.ceil(count / max(1, limit // 6)))
@@ -185,8 +229,13 @@ class MeasurementStore:
                     result.extend(thin_points(group, 6)); group = []
             if group:
                 result.extend(thin_points(group, 6))
-        return dict(points=thin_points(result, limit), point_columns=POINT_COLUMNS,
-                    total_points=count, updated_at=metadata['updated_at'], decimated=count > len(result))
+        displayed=thin_points(result, limit)
+        chart=dict(points=displayed, point_columns=POINT_COLUMNS,total_points=count,
+                   updated_at=metadata['updated_at'],decimated=count>len(displayed),sampling=CHART_SAMPLER)
+        with self._chart_lock:
+            self._chart_cache[cache_key]=deepcopy(chart)
+            while len(self._chart_cache)>8:self._chart_cache.popitem(last=False)
+        return chart
 
     def latest(self):
         with self.db() as db:
@@ -194,12 +243,18 @@ class MeasurementStore:
         if row is None:
             return None
         metadata = with_version(json.loads(row['metadata']))
+        if metadata['state'] not in ('starting','running'):
+            try:chart=self.points(metadata['id'])
+            except FileNotFoundError:return None
+            return dict(metadata=metadata,points=chart['points'],point_columns=POINT_COLUMNS,
+                        total_points=chart['total_points'],sampling=chart['sampling'])
         live = self.folder(metadata['id']) / 'live.json'
         points = None
         if live.is_file() and not live.is_symlink():
             points = json.loads(live.read_text())
         return dict(metadata=metadata, points=points['points'] if points else [],
-                    point_columns=POINT_COLUMNS, total_points=points['point_count'] if points else metadata['point_count'])
+                    point_columns=POINT_COLUMNS, total_points=points['point_count'] if points else metadata['point_count'],
+                    sampling=points.get('sampling','legacy_snapshot') if points else CHART_SAMPLER)
 
     def download(self, dataset_id, kind):
         metadata = self.get(dataset_id)
@@ -331,7 +386,8 @@ class DatasetWriter:
         with self.store.db() as db:
             db.executemany('INSERT INTO points VALUES (?,?,?,?,?)',
                            [(self.metadata['id'], *point) for point in points])
-        self.trace = thin_points(self.trace + points, 1800)
+        if not hasattr(self,'sampler'):self.sampler=StreamingTrace()
+        self.sampler.append(points)
         self.publish()
 
     def publish(self, force=False, **fields):
@@ -341,6 +397,7 @@ class DatasetWriter:
         if not force and time.monotonic() - self.last_publish < .4:
             return
         self.last_publish = time.monotonic()
+        self.trace=self.sampler.points() if hasattr(self,'sampler') else []
         self.metadata['updated_at'] = now()
         raw = json.dumps(self.metadata, ensure_ascii=False, allow_nan=False)
         with self.store.db() as db:
@@ -348,7 +405,7 @@ class DatasetWriter:
                        (self.metadata['state'], raw, self.metadata['id']))
         private_json(self.folder / 'metadata.json', self.metadata)
         private_json(self.folder / 'live.json', dict(points=self.trace,
-            point_count=self.metadata['point_count'], updated_at=self.metadata['updated_at']))
+            point_count=self.metadata['point_count'], updated_at=self.metadata['updated_at'],sampling=CHART_SAMPLER))
 
     def finish(self, state, stop_confirmed=False, message=None, **fields):
         try:
