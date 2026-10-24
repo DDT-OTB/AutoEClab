@@ -18,6 +18,7 @@ export function ExecutionConfirmation({prepared,currentSequence,pending,error,on
   return <div className="modal-backdrop automation-backdrop"><section className="modal automation-confirmation" role="dialog" aria-modal="true" aria-label="确认执行实验流程">
     <div className="modal-header"><h2><ShieldCheck size={19}/>执行实验流程</h2><button className="icon-button" onClick={onClose} disabled={pending || running} aria-label="关闭流程执行"><X size={18}/></button></div>
     <p className="automation-confirmation-intro">前置功能块通过后，才会执行正式实验。每次运行都使用本次固定的方案与设备参数。</p>
+    {prepared.preview.warnings?.map((warning,index)=><p key={index} className="measurement-warning">{warning}</p>)}
     <div className="automation-plan-heading"><strong>{prepared.sequence.id}</strong><span>前置准备 + {mainSteps.length} 个实验动作</span></div>
     <PreflightProgress info={info} calibration={prepared.calibration} cell={prepared.cell_preparation}>
       {waiting?<label className="preflight-acknowledgement"><input type="checkbox" checked={empty} disabled={pending || !fresh} onChange={event=>setEmpty(event.target.checked)}/>已现场检查，确认本次电解池已排空</label>:ready && !automatic?<label className="preflight-acknowledgement"><input type="checkbox" checked={discharge} disabled={pending || !fresh} onChange={event=>setDischarge(event.target.checked)}/>已确认本次回零排液和所选废液流路的接液条件安全</label>:null}
@@ -40,7 +41,7 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
   const preparedRef=useRef(prepared);preparedRef.current=prepared;
   const completedRuns=useRef(new Set());
   const current=status.execution?.current,enabled=status.execution?.enabled ?? health?.hardware_execution_enabled;
-  const availability=automationAvailability({user,enabled,fresh,current,runtime:status.runtime,errors:hasSequence?errors:['请先加载或导入一个实验流程。'],measurementCount,busy:busy || !!pending});
+  const availability=automationAvailability({user,enabled,fresh,current,runtime:status.runtime,errors:hasSequence?errors:['请先加载或导入一个实验流程。'],measurementCount,measurementEnabled:health?.measurement_execution_enabled,busy:busy || !!pending});
   useEffect(()=>{if(current?.run_id)setNotice('');},[current?.run_id]);
   function accept(value) {
     if(preparedRef.current?.run_id!==value.run_id)return;

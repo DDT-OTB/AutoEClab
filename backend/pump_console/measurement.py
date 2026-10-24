@@ -1,4 +1,4 @@
-"""Validate CV drafts and weave them into legacy pump plans without executing them."""
+"""Validate CV parameters and compile ordered pump/workstation plans."""
 from copy import deepcopy
 import math
 from pathlib import Path
@@ -12,12 +12,21 @@ CV_FIELDS = {"initial_potential_v", "upper_potential_v", "lower_potential_v", "f
              "current_range_a", "reference_electrode"}
 
 
-def measurement_templates():
+def measurement_templates(station=None):
     path = Path(__file__).resolve().parents[2] / "config/action_templates/cyclic_voltammetry.json"
     template = json.loads(path.read_text())
     if template["device_id"] != MEASUREMENT_DEVICE or template["device"]["execution_supported"] is not False:
         raise ValueError("The workstation template must remain planning-only")
     validate_cv(template["action"]["default_parameters"])
+    if station and station['enabled']:
+        template['device'].update(execution_supported=True, connection_status='configured',
+                                  max_potential_v=station['max_potential_v'],
+                                  max_cycles=station['max_cycles'], timing_verified=station['timing_verified'])
+        from .ec110 import RANGES
+        template['device']['current_ranges_a'] = [value[0] for value in RANGES.values()]
+        p = template['action']['default_parameters']
+        edge = min(.1, station['max_potential_v'])
+        p.update(upper_potential_v=edge, lower_potential_v=-edge, scan_rate_v_s=.03)
     return {MEASUREMENT_DEVICE: template}
 
 
@@ -80,7 +89,7 @@ def validate_measurement(step):
     return validate_cv(step.get("parameters"))
 
 
-def compile_workflow(sequence, devices, templates, compiler, config):
+def compile_workflow(sequence, devices, templates, compiler, config, station=None):
     sequence = flatten_sequence(sequence)
     config.keys(sequence, {"schema_version","id","description","steps","notes"},
                 {"schema_version","id","description","steps"}, "总流程")
@@ -102,13 +111,18 @@ def compile_workflow(sequence, devices, templates, compiler, config):
             description = step.get("description","Cyclic voltammetry measurement draft")
             if not isinstance(description,str):
                 raise ValueError("测量动作 description 须为文字。")
+            supported = bool(station and station['enabled'])
+            from .ec110 import encode_cv
+            hardware = encode_cv(step['parameters'], station) if supported else None
             measurement_steps[index] = {
                 "id":name,"index":index,"device":MEASUREMENT_DEVICE,"device_label":"Electrochemical workstation",
                 "action":"measurement","operation":"measure","technique":"cyclic_voltammetry",
                 "description":description,"parameters":deepcopy(step["parameters"]),
-                "estimated_measurement_s":duration,"execution_supported":False,
-                "integration_status":"not_integrated",
+                "estimated_measurement_s":duration,"execution_supported":supported,
+                "integration_status":"ec110_cv" if supported else "not_integrated",
             }
+            if hardware is not None:
+                measurement_steps[index]['hardware_parameters'] = hardware
         else:
             pump_steps.append({**step,"id":name})
     if pump_steps:
@@ -126,7 +140,10 @@ def compile_workflow(sequence, devices, templates, compiler, config):
             compiled.append({**plan["steps"][pump_index],"index":index})
             pump_index += 1
     plan["steps"] = compiled
-    plan["ready_for_hardware"] = False
-    plan["unresolved"].append("electrochemical_station: workstation integration is not implemented; measurement steps cannot execute")
+    if station and station['enabled']:
+        plan['ready_for_hardware'] = not plan['unresolved']
+    else:
+        plan["ready_for_hardware"] = False
+        plan["unresolved"].append("electrochemical_station: workstation integration is not implemented; measurement steps cannot execute")
     plan["measurement_step_count"] = len(measurement_steps)
     return plan

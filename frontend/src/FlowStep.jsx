@@ -16,7 +16,7 @@ export default function FlowStep({ step, index, template, title, selected, runni
     <button type="button" className="step-select" onClick={onSelect} aria-pressed={selected} aria-label={'编辑第 ' + (index+1) + ' 步参数'}>
       <span className="step-icon"><ActionIcon kind={template?.device.kind} size={18} /></span>
       <span className="step-content"><span className="step-title"><strong>{title}</strong><span className="step-operation">{operationLabels[step.operation] || step.operation}</span>
-        {measurement ? <span className="measurement-draft-tag">预留</span> : step.fluid && <span className="fluid-tag">{fluidLabels[step.fluid] || step.fluid}</span>}
+        {measurement ? <span className="measurement-draft-tag">CV</span> : step.fluid && <span className="fluid-tag">{fluidLabels[step.fluid] || step.fluid}</span>}
         {running && <span className="live-step-tag"><span className="status-dot green pulse-dot" />执行中</span>}</span>
         <span className="step-brief">{stepSummary(step,template)}</span>
         {cellVolume && <small className={'cell-step-volume '+(cellVolume.over_capacity?'over-capacity':'')}>预计池内 {cellVolume.after_ml} / {cellCapacity} mL</small>}

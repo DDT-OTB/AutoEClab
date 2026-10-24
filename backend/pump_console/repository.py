@@ -52,12 +52,16 @@ def identifier(value):
 
 
 class LabRepository:
-    def __init__(self, lab_root, data_root, monitoring=None, device_status=None, execution_enabled=False, automation=None):
+    def __init__(self, lab_root, data_root, monitoring=None, device_status=None, execution_enabled=False, automation=None, station=None):
         self.root = Path(lab_root).resolve()
         self.templates_dir = self.root / "config/templates"
         self.sequences_dir = self.root / "config/sequences"
         self.logs_dir = self.root / "logs/automation"
         self.data_root = Path(data_root)
+        from .ec110 import station_policy
+        from .measurement_store import MeasurementStore
+        self.station = station_policy(station)
+        self.measurements = MeasurementStore(self.data_root)
         self.lock = threading.RLock()
         self.monitoring = {"push_interval_seconds": 1, "stale_after_seconds": 15, **(monitoring or {})}
         self.runtime = RuntimeMonitor(self.logs_dir, self.monitoring["stale_after_seconds"])
@@ -79,7 +83,7 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.12.0",
+            "ok": True, "service": "pump-console", "version": "0.13.0",
             "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,
             "workflow_schema_versions": [2, 3],
@@ -90,7 +94,9 @@ class LabRepository:
             "cell_preparation_required_before_each_experiment": True,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
-            "measurement_execution_enabled": False,
+            "measurement_execution_enabled": self.station['enabled'] and self.execution.enabled,
+            "measurement_techniques": ['cyclic_voltammetry'],
+            "cv_timing_verified": self.station['timing_verified'],
             "lab_root": str(self.root), "server_time": utc_now(),
             "ui": {"default_volume_ml": 1, "status_poll_seconds": self.monitoring["push_interval_seconds"]},
         }
@@ -111,7 +117,7 @@ class LabRepository:
                 preflight = require_preflight(sequence)
             flattened = flatten_sequence(sequence)
             devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
-            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config)
+            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config, self.station)
         except (ValueError, KeyError, TypeError) as error:
             raise ApiError(422, str(error), "validation_error") from error
         try:
@@ -123,9 +129,11 @@ class LabRepository:
             for step in plan["steps"])
         warnings = []
         if any(is_measurement(step) for step in flattened["steps"]):
-            warnings.append("测量参数可保存，但电化学工作站尚未接入，测量动作不能执行。")
+            warnings.append("CV 电流与电位采用名义换算；时间轴使用服务器接收时间。" if self.station['enabled'] else "测量参数可保存，但电化学工作站尚未接入，测量动作不能执行。")
+            if self.station['enabled'] and not self.station['timing_verified']:
+                warnings.append('扫描速率为协议换算目标值，当前固件的计时参数尚未独立校准；下发的 DAC 参数会随数据保存。')
             if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in flattened["steps"]):
-                warnings.append("部分测量动作尚未指定参比电极；当前电位参数仅为编排草稿。")
+                warnings.append("部分测量动作尚未注明参比电极，测量记录会保留 unspecified。")
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
                 "preflight": preflight,
                 "blocks": block_ranges(sequence),
@@ -347,7 +355,8 @@ class LabRepository:
                       str(step.get("volume_ml", step.get("route", step.get("technique", "—"))))]
             rows.append("| " + " | ".join(value.replace("|", r"\|") for value in values) + " |")
             if is_measurement(step):
-                measurement_blocks.append(f"\n\n### 第 {index} 步：循环伏安法参数（尚未接入工作站）\n\n" +
+                integration = 'EC110 已配置' if self.station['enabled'] else '尚未接入工作站'
+                measurement_blocks.append(f"\n\n### 第 {index} 步：循环伏安法参数（{integration}）\n\n" +
                     "~~~json\n" + json.dumps(step["parameters"],ensure_ascii=False,indent=2) + "\n~~~\n" +
                     "JSON 使用 V、V/s、A 和 s；圈数为完整循环数。电位以所填参比电极为准。\n")
         groups = block_ranges(sequence)
@@ -433,7 +442,16 @@ class LabRepository:
                 "hardware": hardware,
                 "last_observation": observed.get(name), "rpm": config.get("rpm"),
                 "speed_steps_s": config.get("speed_steps_s"), "channels": config.get("channels")})
+        measurement = self.measurements.latest()
+        if self.station['enabled']:
+            activity = runtime['devices'].get('electrochemical_station')
+            devices.append(dict(id='electrochemical_station', label='EC110 electrochemical workstation', kind='electrochemical',
+                                port_present=Path(self.station['port']).exists(),
+                                state=activity['state'] if activity else 'unknown', activity=activity,
+                                source='controller_journal' if activity else 'configured',
+                                hardware=None, last_observation=None))
         return {"devices": devices, "sampled_at": utc_now(), "mode": "controller_events", "runtime": runtime,
+                "measurement": measurement,
                 "device_scan": scan, "serial_commands_sent": scan.get("queries_sent", 0),
                 "motion_commands_sent": None if self.execution.enabled else 0,
                 "hardware_execution_enabled": self.execution.enabled, "execution": execution}
@@ -445,10 +463,10 @@ class LabRepository:
         if current and current['controller_alive']:
             return {"scan": {"state": "skipped", "reason": "controller_active"}, "status": self.status(),
                     "health": self.health(), "runs": self.runs(), "templates": self.templates(),
-                    "measurement_templates": measurement_templates()}
+                    "measurement_templates": measurement_templates(self.station)}
         try:
             scan = self.device_status.refresh(self.templates())
         except RefreshBusy:
             raise ApiError(409, "正在刷新设备状态，请稍候。", "status_refresh_busy")
         return {"scan": scan, "status": self.status(), "health": self.health(), "runs": self.runs(), "templates": self.templates(),
-                "measurement_templates": measurement_templates()}
+                "measurement_templates": measurement_templates(self.station)}

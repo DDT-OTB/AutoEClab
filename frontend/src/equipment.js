@@ -26,9 +26,12 @@ export function equipmentDevices(templates, measurementTemplates, status, fresh)
     };
   });
   const template = measurementTemplates?.electrochemical_station;
-  items.push({ id:'electrochemical_station', ...DEVICE_MAP.electrochemical_station, virtual:true,
+  const integrated=template?.device?.execution_supported===true;
+  const device=status.devices?.find(item=>item.id==='electrochemical_station');
+  items.push({ id:'electrochemical_station', ...DEVICE_MAP.electrochemical_station, virtual:!integrated,
+    subtitle:integrated?'循环伏安法 · EC110':DEVICE_MAP.electrochemical_station.subtitle, device,
     template, config:template?.device || {kind:'electrochemical'},
-    activity:{state:'not_integrated',label:'尚未接入'},
+    activity:integrated?deviceActivity(device,status.runtime,fresh):{state:'not_integrated',label:'尚未接入'},
   });
   return items;
 }
@@ -74,6 +77,7 @@ export function equipmentStatusSource(item, fresh) {
 
 export function deviceQuickInfo(item) {
   if (item.virtual) return 'CV 参数已可编排';
+  if(item.id==='electrochemical_station')return 'CV 测量 · 自动归档';
   if (item.activity.state==='executing' && typeof item.activity.volume_ml==='number') return '目标 '+item.activity.volume_ml+' mL';
   if (item.config.rpm) return '模板 '+item.config.rpm+' rpm';
   if (item.config.speed_steps_s) return '模板 '+item.config.speed_steps_s+' 步/秒';

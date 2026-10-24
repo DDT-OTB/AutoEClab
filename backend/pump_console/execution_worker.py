@@ -23,8 +23,6 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     job = parse_json((folder / 'job.json').read_bytes())
     if version(snapshot) != job['version']:
         raise ValueError('Prepared snapshot version changed')
-    if any(is_measurement(step) for step in flatten_sequence(snapshot['sequence'])['steps']):
-        raise ValueError('Workstation execution is not integrated')
     root = Path(lab_root).resolve()
     sys.path.insert(0, str(root / 'src'))
     config = importlib.import_module('lab_automation.config')
@@ -52,7 +50,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Explicit discharge confirmation is required for calibration')
         config.validate_devices(snapshot['devices'])
-    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config)
+    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'))
     if plan != snapshot['plan'] or plan['unresolved'] or not plan['ready_for_hardware']:
         raise ValueError('Prepared plan did not pass controller validation')
     logs = root / 'logs/automation'
@@ -113,8 +111,15 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                             'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
                         publish(initialization_verified=True)
                     else:
-                        factory = runner_factory or controller.Runner
-                        factory(snapshot['devices']['devices'], plan, event).run()
+                        if any(step['action'] == 'measurement' for step in plan['steps']):
+                            if operation != 'sequence' or runner_factory is not None:
+                                raise ValueError('Mixed CV execution requires the fixed workstation adapter')
+                            from .mixed_runner import run_mixed
+                            run_mixed(snapshot['devices']['devices'], plan, event, controller, snapshot['station'],
+                                      Path(run_directory).resolve().parent, run_id, job['started_by'])
+                        else:
+                            factory = runner_factory or controller.Runner
+                            factory(snapshot['devices']['devices'], plan, event).run()
                         if operation == 'drain_cell':
                             publish(cell_drain_completed=True)
                 finally:

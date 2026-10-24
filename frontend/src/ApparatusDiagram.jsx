@@ -66,7 +66,7 @@ export default function ApparatusDiagram({ items, runtime, fresh, selectedId, on
   const active=activeFlowDevice(items,runtime,fresh), route=confirmedWasteRoute(items,runtime,fresh);
   const byId=Object.fromEntries(items.map(item=>[item.id,item]));
   const activeItem=items.find(item=>item.id===active);
-  const phase=active==='peristaltic_2'?'正在排液':active==='valve'?'正在切换流路':active?'正在注液':'实验单元';
+  const phase=active==='electrochemical_station'?'正在测量':active==='peristaltic_2'?'正在排液':active==='valve'?'正在切换流路':active?'正在注液':'实验单元';
   const reset=()=>onSelect(null);
   return <section className="apparatus-panel" aria-label="实验装置工作流图">
     <header className="equipment-panel-heading"><div><span className="equipment-eyebrow">APPARATUS FLOW</span><h3>装置流程图</h3></div><span className="equipment-panel-hint">点击设备查看状态</span></header>
@@ -85,12 +85,12 @@ export default function ApparatusDiagram({ items, runtime, fresh, selectedId, on
         <FluidPipe path="M 701 355 H 702 Q 712 355 712 365 V 422 Q 712 434 700 434 H 613 Q 601 434 601 446 V 458" tone="waste" working={active==='peristaltic_2'} prefix={prefix}/>
         <FluidPipe path="M 578.5 561 H 558 Q 548 561 548 571 V 635" tone="waste" working={active==='peristaltic_2' && route?.channel===5} prefix={prefix}/>
         <FluidPipe path="M 623.5 561 H 644 Q 654 561 654 571 V 635" tone="waste" working={active==='peristaltic_2' && route?.channel===6} prefix={prefix}/>
-        <g className="measurement-cables" aria-label="预留的三电极测量连接">
+        <g className={'measurement-cables'+(active==='electrochemical_station'?' is-measuring':'')} aria-label={byId.electrochemical_station?.virtual?'预留的三电极测量连接':'三电极测量连接'}>
           <path d="M 338 163 V 210 Q 338 221 341 231 V 321" className="electrode-working"/>
           <path d="M 367 163 V 225 Q 367 237 374 245 V 321" className="electrode-reference"/>
           <path d="M 396 163 V 210 Q 396 222 407 231 V 321" className="electrode-counter"/>
         </g>
-        <g className="measurement-cable-caption" aria-hidden="true"><text x="433" y="214">三电极测量</text><text x="433" y="231" className="measurement-cable-reserved">预留连接 · 尚未接入</text></g>
+        <g className="measurement-cable-caption" aria-hidden="true"><text x="433" y="214">三电极测量</text><text x="433" y="231" className="measurement-cable-reserved">{byId.electrochemical_station?.virtual?'预留连接 · 尚未接入':active==='electrochemical_station'?'EC110 · 正在采集':'EC110 · CV 测量'}</text></g>
         {NODES.map(node=><InstrumentNode key={node.id} item={byId[node.id]} node={node} prefix={prefix} channel={route?.channel} selectedId={selectedId} onSelect={onSelect}/>)}
         <g className={'reactor-node'+(active?' reactor-working':'')} transform="translate(292 321)" role="button" tabIndex={0} aria-label="返回全部设备状态总览" onClick={reset} onKeyDown={event=>activateOnKeyboard(event,reset)}>
           <title>电解池结构与液位示意；点击返回全部设备状态</title>

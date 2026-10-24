@@ -4,6 +4,15 @@
   "lab_root": "./data/demo-lab",
   "static_root": "../frontend/dist",
   "hardware_execution_enabled": false,
+  "electrochemical_station": {
+    "enabled": false,
+    "port": "",
+    "max_potential_v": 0.1,
+    "max_cycles": 10,
+    "dac_reference_mv": 120,
+    "step_time_unit_ns": 1000,
+    "timing_verified": false
+  },
   "automation": {"prepare_ttl_seconds": 600},
   "authentication": {
     "enabled": true,

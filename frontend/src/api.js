@@ -59,6 +59,18 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
       method: 'DELETE', body: JSON.stringify({ expected_version }),
     }),
     runs: () => request('/api/runs'),
+    measurements: (filters={}) => request('/api/measurements?'+new URLSearchParams(Object.entries(filters).filter(([,value])=>value!=='' && value!==undefined))),
+    measurement: id => request('/api/measurements/'+encodeURIComponent(id)),
+    downloadMeasurement: async (id,format='csv') => {
+      const response=await fetcher(base+'/api/measurements/'+encodeURIComponent(id)+'/download?format='+encodeURIComponent(format),{credentials:'same-origin'});
+      if(!response.ok){
+        const data=await response.json();
+        if(response.status===401){csrfToken=null;onUnauthorized?.();if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('pump-console-auth-required'));}
+        throw new Error(data.message || '数据下载失败。');
+      }
+      const match=/filename="([A-Za-z0-9_.-]+)"/.exec(response.headers.get('Content-Disposition') || '');
+      return {blob:await response.blob(),filename:match?.[1] || id+'.'+format};
+    },
     execution: () => request('/api/execution'),
     prepareExecution: sequence => request('/api/execution/prepare', { method: 'POST', body: JSON.stringify({sequence}) }),
     advanceWorkflow: (run_id,version,confirm_discharge=false,empty_confirmed=false) => request('/api/execution/advance', {method:'POST',body:JSON.stringify({run_id,version,confirm_discharge,empty_confirmed})}),

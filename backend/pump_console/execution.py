@@ -118,7 +118,7 @@ class ExecutionManager:
         devices, templates = self._templates()
         preview = self.repository.preview(sequence, _templates=(devices, templates))
         plan = preview['plan']
-        if any(step.get('execution_supported') is False or step.get('action') == 'measurement' for step in plan['steps']):
+        if any(step.get('execution_supported') is False for step in plan['steps']):
             raise ApiError(422, '电化学工作站尚未接入；包含测量的方案不能启动，也不会跳过测量执行。', 'instrument_not_integrated')
         if plan['unresolved'] or not plan.get('ready_for_hardware'):
             raise ApiError(422, '方案仍有未解决的配置：' + '; '.join(plan['unresolved']), 'configuration_incomplete')
@@ -130,6 +130,9 @@ class ExecutionManager:
         run_id = now.strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(6)
         snapshot = {'schema_version': 1, 'sequence': sequence, 'devices': devices, 'templates': templates, 'plan': plan,
                     'operation': operation, 'target_run_id': target_run_id, 'safety_policy': load_policy()}
+        if any(step.get('action') == 'measurement' for step in plan['steps']):
+            from copy import deepcopy
+            snapshot['station'] = deepcopy(self.repository.station)
         fingerprint = version(snapshot)
         with self.lock:
             folder = self._folder(run_id)
@@ -332,6 +335,8 @@ class ExecutionManager:
         snapshot = parse_json((folder / 'snapshot.json').read_bytes())
         if version(snapshot) != expected_version or snapshot.get('safety_policy') != load_policy():
             raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
+        if 'station' in snapshot and snapshot['station'] != self.repository.station:
+            raise ApiError(409, '工作站配置已更新，请重新准备。', 'station_configuration_changed')
         if version(self._templates()[1]) != job['templates_version']:
             raise ApiError(409, '设备模板已更新，请重新准备。', 'templates_changed')
         if not 0 <= (datetime.now(timezone.utc) - timestamp(job['prepared_at'])).total_seconds() <= self.policy['prepare_ttl_seconds']:
@@ -464,7 +469,7 @@ class ExecutionManager:
             except FileNotFoundError:
                 last_homing = None
             return {'enabled': self.enabled, 'administrator_required': True,
-                    'measurement_execution_enabled': False, 'current': current,
+                    'measurement_execution_enabled': self.enabled and self.repository.station['enabled'], 'current': current,
                     'syringe_calibration': {'required_before_each_experiment': True, 'last_homing': last_homing}}
 
     def journal_path(self):
@@ -472,9 +477,9 @@ class ExecutionManager:
             _, job = self._current()
             return self.repository.logs_dir / ('run-' + job['run_id'] + '.jsonl') if job else None
 
-    def _check_ports(self, devices, plan):
+    def _check_ports(self, devices, plan, station=None):
         for name in dict.fromkeys(step['device'] for step in plan['steps']):
-            path = Path(devices['devices'][name]['port'])
+            path = Path(station['port'] if name == 'electrochemical_station' and station else devices['devices'][name]['port'])
             try:
                 mode = path.stat().st_mode
             except OSError:
@@ -510,13 +515,15 @@ class ExecutionManager:
                 raise ApiError(409, '设备模板已更新，请重新准备运行。', 'templates_changed')
             if snapshot.get('safety_policy') != load_policy():
                 raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
+            if 'station' in snapshot and snapshot['station'] != self.repository.station:
+                raise ApiError(409, '工作站配置已更新，请重新准备。', 'station_configuration_changed')
             if snapshot.get('operation', 'sequence') == 'sequence':
                 try:
                     require_preflight(snapshot['sequence'], snapshot['safety_policy'])
                 except ValueError as error:
                     raise ApiError(422, str(error), 'preflight_required') from error
                 require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
-            self._check_ports(snapshot['devices'], snapshot['plan'])
+            self._check_ports(snapshot['devices'], snapshot['plan'], snapshot.get('station'))
             calibration = self._calibration_state(folder, job)
             if calibration['required'] and calibration['state'] != 'passed':
                 raise ApiError(409, '本次实验尚未完成注射泵回零校验，请先确认排液条件并执行校验。', 'syringe_calibration_required')

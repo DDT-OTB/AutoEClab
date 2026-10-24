@@ -1,8 +1,8 @@
 import React from 'react';
-import {Activity,FilePenLine,FolderOpen,History,Users} from 'lucide-react';
+import {Activity,Database,FilePenLine,FolderOpen,History,Users} from 'lucide-react';
 import {workspacePages} from './workspace.js';
 
-const icons={run:Activity,plans:FolderOpen,history:History};
+const icons={run:Activity,plans:FolderOpen,data:Database,history:History};
 export default function WorkspaceNav({active,onNavigate,count,user,onAccounts,mobile=false}) {
   return <nav className={mobile?'mobile-workspace-nav':''} aria-label={mobile?'页面导航':'主导航'}>
     {Object.entries(workspacePages).map(([id,page])=>{const Icon=icons[id];return <button type="button" key={id} className={active===id?'nav-active':''} aria-current={active===id?'page':undefined} aria-label={page.label} title={page.label} onClick={()=>onNavigate(id)}><Icon size={18}/><span>{page.label}</span>{id==='plans' && <em>{count}</em>}</button>;})}

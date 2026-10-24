@@ -1,3 +1,3 @@
-"""Configuration-only web console. No serial or actuator control is imported."""
+"""Authenticated laboratory workflows; serial access remains in execution workers."""
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"

@@ -98,6 +98,8 @@ class RuntimeMonitor:
                     if self.current and self.current["step"].get("id") == event.get("id"):
                         self.finished.add(self.current["step"].get("device"))
                         self.current = None
+                elif kind in ('measurement_started', 'measurement_progress') and self.current:
+                    self.current['measurement'] = event
                 elif kind in ("serial_error", "stop_failed"):
                     self.faults.add(event.get("device"))
                 elif kind in ("sequence_completed", "sequence_aborted"):
@@ -142,7 +144,7 @@ class RuntimeMonitor:
                 return result
             step = self.current["step"]
             elapsed = max(0, (now - timestamp(self.current["time"])).total_seconds())
-            duration = step.get("duration_s") or step.get("estimated_movement_s") or step.get("seconds")
+            duration = step.get("duration_s") or step.get("estimated_movement_s") or step.get("estimated_measurement_s") or step.get("seconds")
             if not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
                 duration = None
             if step.get("action") == "wait" and duration and elapsed <= duration + self.stale_after:
@@ -152,6 +154,12 @@ class RuntimeMonitor:
             active.update(started_at=self.current["time"], elapsed_seconds=round(elapsed, 2), estimated_seconds=duration,
                           progress_fraction=min(elapsed / duration, 0.99) if duration else None,
                           progress_is_estimate=True, volume_measured=False, state="unknown" if stale else "executing")
+            if step.get('action') == 'measurement':
+                observed = self.current.get('measurement', {})
+                active.update(measurement_id=observed.get('measurement_id'), point_count=observed.get('point_count', 0),
+                              technique=step.get('technique'), progress_is_estimate=False,
+                              progress_fraction=(min(observed.get('targets_reached', 0) / observed['target_count'], .99)
+                                                 if observed.get('target_count', 0) > 0 else None))
             if step.get("device") in self.faults:
                 active["state"] = "error"
                 result.update(state="error", reason="controller_error")

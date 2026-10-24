@@ -12,7 +12,7 @@ export function deviceActivity(device, runtime, fresh) {
   }
   if (activity.state === 'error') return { ...activity, label: '执行异常' };
   if (activity.state === 'executing') {
-    const labels = { dose: '正在注入', drain: '正在抽出', syringe_transfer: '吸入 / 注入中', switch_valve: '正在切阀', wait: '等待中', initialize_syringe: '正在机械回零校验' };
+    const labels = { dose: '正在注入', drain: '正在抽出', syringe_transfer: '吸入 / 注入中', switch_valve: '正在切阀', wait: '等待中', initialize_syringe: '正在机械回零校验', measurement:'正在采集 CV' };
     return { ...activity, label: labels[activity.action] || '正在执行' };
   }
   return { ...activity, label: activity.state === 'completed' ? '本次动作完成' : '程序待命' };

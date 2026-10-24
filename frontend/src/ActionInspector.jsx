@@ -36,7 +36,7 @@ export default function ActionInspector({ step, template, index, title, onChange
       <span className="action-editor-icon"><ActionIcon kind={config.kind} size={22} /></span><div><span className="action-editor-index">步骤 {String(index+1).padStart(2,'0')} · {operationLabels[step.operation]}</span><h3>{title}</h3><p>{measurement ? '循环伏安法 · CV' : step.device}</p></div>
     </div>
     {measurement ? <>
-      <div className="measurement-integration-note"><LockKeyhole size={15} /><span>测量动作已预留，工作站尚未接入。可编辑并保存参数，当前不会进行实际测量。</span></div>
+      <div className="measurement-integration-note"><LockKeyhole size={15} /><span>{config.execution_supported?'EC110 · 参数由后端编码；执行时校验仪器身份并实时采集。当前电位限制 ±'+config.max_potential_v+' V。':'测量动作已预留，工作站尚未接入。可编辑并保存参数，当前不会进行实际测量。'}</span></div>
       <section className="parameter-group"><h4>电位窗口</h4><div className="parameter-grid">
         <NumberField label="起始电位" value={p.initial_potential_v} onChange={value => updateParameter('initial_potential_v',value)} unit="V" step="0.01" />
         <NumberField label="终止电位" value={p.final_potential_v} onChange={value => updateParameter('final_potential_v',value)} unit="V" step="0.01" />
@@ -46,18 +46,18 @@ export default function ActionInspector({ step, template, index, title, onChange
       <section className="parameter-group"><h4>扫描与采样</h4><div className="parameter-grid">
         <NumberField label="扫描速率" value={p.scan_rate_v_s} onChange={value => updateParameter('scan_rate_v_s',value)} unit="mV/s" scale={1000} min="0" />
         <NumberField label="采样电位间隔" value={p.potential_step_v} onChange={value => updateParameter('potential_step_v',value)} unit="mV" scale={1000} min="0" />
-        <NumberField label="扫描圈数" value={p.cycles} onChange={value => updateParameter('cycles',value)} unit="圈" min="1" max="10000" step="1" />
+        <NumberField label="扫描圈数" value={p.cycles} onChange={value => updateParameter('cycles',value)} unit="圈" min="1" max={config.max_cycles || 10000} step="1" />
         <NumberField label="扫描前静置" value={p.quiet_time_s} onChange={value => updateParameter('quiet_time_s',value)} unit="s" min="0" />
       </div></section>
       <section className="parameter-group"><h4>量程与电位参照</h4><label className="parameter-field"><span>电流量程</span><select value={p.current_range_a === null ? 'auto' : 'manual'} onChange={event => updateParameter('current_range_a',event.target.value === 'auto' ? null : '')} aria-label="电流量程"><option value="auto">自动量程</option><option value="manual">指定固定量程</option></select></label>
-        {p.current_range_a !== null && <NumberField label="固定电流量程" value={p.current_range_a} onChange={value => updateParameter('current_range_a',value)} unit="µA" scale={1000000} min="0" />}
+        {p.current_range_a !== null && (config.current_ranges_a?<label className="parameter-field"><span>固定电流量程</span><select value={p.current_range_a} aria-label="固定电流量程" onChange={event=>updateParameter('current_range_a',Number(event.target.value))}><option value="" disabled>选择仪器量程</option>{config.current_ranges_a.map(value=><option key={value} value={value}>{value>=.001?value*1000+' mA':value>=.000001?Number((value*1000000).toPrecision(8))+' µA':Number((value*1e9).toPrecision(8))+' nA'}</option>)}</select></label>:<NumberField label="固定电流量程" value={p.current_range_a} onChange={value => updateParameter('current_range_a',value)} unit="µA" scale={1000000} min="0" />)}
         <label className="parameter-field"><span>参比电极</span><input list="cv-reference-options" value={p.reference_electrode === 'unspecified' ? '' : p.reference_electrode || ''} onChange={event => updateParameter('reference_electrode',event.target.value || 'unspecified')} placeholder="待确认，例如 RHE 或 Ag/AgCl" aria-label="参比电极" /><datalist id="cv-reference-options">{['Ag/AgCl','SCE','SHE','RHE','Hg/HgO','Hg/Hg2SO4'].map(value => <option value={value} key={value} />)}</datalist></label>
-        <p className="parameter-hint">{p.reference_electrode === 'unspecified' ? '参比电极尚未指定，电位参数当前仅作编排草稿。' : '参比电极采用英文标识保存；实际参数范围待工作站接入后复核。'}</p>
+        <p className="parameter-hint">{p.reference_electrode === 'unspecified' ? config.execution_supported?'尚未注明参比电极；记录将保留 unspecified。':'参比电极尚未指定，电位参数当前仅作编排草稿。' : '参比电极采用英文标识保存，电位设定以现场连接的参比电极为准。'}</p>
       </section>
       {cvErrors(p).length > 0 && <div className="parameter-validation" role="status"><CircleHelp size={15} /><span>{cvErrors(p)[0]}</span></div>}
       <VoltageProgram parameters={p} />
       <div className="measurement-duration"><span>预计测量时长</span><strong>{formatDuration(cvDuration(p))}</strong></div>
-      <p className="parameter-hint">含扫描前静置；不含工作站通讯及设备自身额外等待。默认值仅为草稿示例。</p>
+      <p className="parameter-hint">含扫描前静置；不含工作站通讯及设备自身额外等待。{config.execution_supported && config.timing_verified===false?'扫描速率为协议换算目标值，当前固件计时尚未独立校准。实际下发参数随测试保存。':'默认值仅为草稿示例。'}</p>
     </> : <>
       <section className="parameter-group"><h4>本步骤设置</h4>
       {config.kind === 'valve' ? <>

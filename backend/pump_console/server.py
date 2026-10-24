@@ -6,9 +6,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 from pathlib import Path
+import os
 import sqlite3
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, parse_qs
 
 from .auth import AuthStore, COOKIE_NAME, SECURE_COOKIE_NAME
 from .access import AccessPolicy
@@ -129,7 +130,9 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     if path.startswith('/api/function-blocks/'):
                         return self.json_response(200, repository.block_library.get(path.removeprefix('/api/function-blocks/')))
                     if path == "/api/templates":
-                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(), "safety_policy": load_policy()})
+                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(repository.station), "safety_policy": load_policy()})
+                    if path == '/api/measurements' or path.startswith('/api/measurements/'):
+                        return self.measurement_read(path)
                     if path == "/api/status":
                         return self.json_response(200, repository.status())
                     if path == "/api/experiments":
@@ -168,6 +171,51 @@ def make_server(host, port, repository, static_root, auth, access=None):
                 self.failure(error)
             except (OSError, ValueError, sqlite3.Error):
                 self.json_response(500, {"error": "server_error", "message": "请求处理失败，请稍后重试。"})
+
+        def measurement_read(self, path):
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            def options(allowed):
+                if set(query) - set(allowed) or any(len(v) != 1 for v in query.values()):
+                    raise ApiError(400, 'Invalid measurement query')
+                return {k: v[0] for k, v in query.items()}
+            try:
+                if path == '/api/measurements':
+                    q = options({'query', 'state', 'limit', 'offset'})
+                    return self.json_response(200, repository.measurements.list(q.get('query', ''), q.get('state', ''),
+                        int(q.get('limit', '50')), int(q.get('offset', '0'))))
+                parts = path.removeprefix('/api/measurements/').split('/')
+                if len(parts) == 1:
+                    options(set())
+                    return self.json_response(200, dict(measurement=repository.measurements.get(parts[0]),
+                                                       chart=repository.measurements.points(parts[0])))
+                if len(parts) == 2 and parts[1] == 'points':
+                    q = options({'limit'})
+                    return self.json_response(200, repository.measurements.points(parts[0], int(q.get('limit', '1800'))))
+                if len(parts) == 2 and parts[1] == 'download':
+                    q = options({'format'})
+                    file, filename = repository.measurements.download(parts[0], q.get('format', 'csv'))
+                    with file.open('rb') as handle:
+                        length = os.fstat(handle.fileno()).st_size
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/octet-stream')
+                        self.send_header('Content-Disposition', 'attachment; filename="' + filename + '"')
+                        self.send_header('Content-Length', str(length))
+                        self.security_headers(); self.end_headers()
+                        try:
+                            remaining = length
+                            while remaining:
+                                chunk = handle.read(min(65536, remaining))
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk); remaining -= len(chunk)
+                        except OSError:
+                            self.close_connection = True
+                    return
+                raise ApiError(404, 'Unknown measurement route', 'not_found')
+            except FileNotFoundError:
+                raise ApiError(404, '测量数据不存在。', 'not_found')
+            except ValueError as exc:
+                raise ApiError(400, str(exc), 'invalid_measurement_request') from exc
 
         def status_stream(self, token):
             self.send_response(200)
@@ -394,7 +442,7 @@ def main():
         if type(value) not in (int, float) or not minimum <= value <= maximum:
             raise ValueError("Invalid device status setting: " + key)
     repository = LabRepository(lab_root, root / "data", monitoring, device_status,
-                               config['hardware_execution_enabled'], config.get('automation'))
+                               config['hardware_execution_enabled'], config.get('automation'), config.get('electrochemical_station'))
     static_root = (args.config.parent / config["static_root"]).resolve()
     server = make_server(config["host"], args.port or config["port"], repository, static_root, auth, access)
     print(f"Pump Console ready: http://{config['host']}:{server.server_port}", flush=True)

@@ -21,6 +21,8 @@ import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
 import ExperimentManager from './ExperimentManager.jsx';
+import DataManagement from './DataManagement.jsx';
+import MeasurementCharts from './MeasurementChart.jsx';
 import AutomationControl from './AutomationControl.jsx';
 import { sequenceKey } from './automation.js';
 import { cellVolumes } from './cellSafety.js';
@@ -56,6 +58,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const [catalog, setCatalog] = useState([]);
   const catalogRequest = useRef(0);
   const [runs, setRuns] = useState([]);
+  const [selectedDataset,setSelectedDataset]=useState(null);
   const [draft, setDraft] = useState(emptyDraft);
   const [base, setBase] = useState({ id: null, version: null });
   const [dirty, setDirty] = useState(false);
@@ -307,7 +310,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       const result = await api.preview(sequence);
       if (latestJson.current !== submittedJson) { setNotice('流程参数已变化，请重新校验当前版本。'); return; }
       setPlan(result); setRightTab('summary');
-      setNotice(measurementCount ? '参数预演完成；测量步骤尚未接入工作站，未执行设备动作。' : '离线预演完成，未发送硬件指令。');
+      setNotice(measurementCount ? health?.measurement_execution_enabled?'CV 参数预演完成，未启动仪器。':'参数预演完成；测量步骤尚未接入工作站，未执行设备动作。' : '离线预演完成，未发送硬件指令。');
     } catch (failure) { setError(failure.message); }
     finally { setBusy(''); }
   }
@@ -378,8 +381,11 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
         {activeNav==='run' && <RunWorkspace sequence={runSequence} preparation={runPreparation && sequenceKey(runPreparation.sequence)===sequenceKey(executionSequence)?runPreparation:null} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
         <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onProgress={setRunPreparation} onRestore={value=>{setRunSequence(structuredClone(value.sequence));setRunSource({kind:'restored',id:null,label:'恢复的前置流程'});setRunPlan(value.preview);}} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
         {activeNav==='run' && <><LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names}/>
+          {status.measurement?.metadata && <MeasurementCharts metadata={status.measurement.metadata} points={status.measurement.points} live={['starting','running'].includes(status.measurement.metadata.state)} fresh={fresh} onOpen={id=>{setSelectedDataset(id);navigate('data');}}/>}
+          {!status.measurement && runMeasurementCount>0 && <div className="measurement-live-empty">CV 开始后，电位—电流与时间—电流曲线会在这里实时显示，采集数据会自动保存。</div>}
           <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
         </>}
+        {activeNav==='data' && <DataManagement selectedId={selectedDataset} onSelect={setSelectedDataset} liveMeasurement={status.measurement}/>}
         {activeNav==='plans' && <section className="plans-workspace" aria-label="实验方案工作区">
           <PlanWorkspaceTabs view={planView} onChange={setPlanView} dirty={dirty}/>
           <div id="plan-workspace-panel" role="tabpanel" aria-label={planView==='files'?'方案文件管理':'实验流程编辑'}>
@@ -415,7 +421,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
                   <div className="summary-metrics"><div><span>目标注入</span><strong>{totals.inject.toLocaleString()}<small>mL</small></strong></div><div><span>标称抽出</span><strong>{totals.withdraw.toLocaleString()}<small>mL</small></strong></div></div>
                   <div className="estimate-row"><History size={17} /><div><span>计时动作合计</span><strong>{formatDuration(plan?.estimated_timed_seconds)}</strong></div></div><p className="estimate-note">含已设置测量的理论时长；不含切阀、通讯与额外等待。</p>
                   <div className={'validation-state '+(errors.length ? 'needs-review' : 'is-ready')}><span>{errors.length ? <CircleHelp size={17} /> : <Check size={17} />}</span><div><strong>{errors.length ? '还需检查' : plan ? '后端参数预演通过' : '本地参数检查通过'}</strong><p>{errors[0] || (plan ? '配置已校验，未执行设备动作。' : '点击“校验与预演”检查后端模板。')}</p></div></div>
-                  {measurementCount > 0 && <div className="measurement-summary-note"><LockKeyhole size={16} /><div><strong>测量动作尚不能执行</strong><p>CV 参数会随方案保存。电化学工作站未接入，不会跳过测量去运行其余动作。</p></div></div>}
+                  {measurementCount > 0 && <div className="measurement-summary-note"><LockKeyhole size={16} /><div><strong>{health?.measurement_execution_enabled?'CV 已接入执行流程':'测量动作尚不能执行'}</strong><p>{health?.measurement_execution_enabled?'前置准备通过后按顺序测量；曲线显示在实验运行页，数据自动归档。':'CV 参数会随方案保存。电化学工作站未接入，不会跳过测量去运行其余动作。'}</p></div></div>}
                   {plan?.warnings?.map((message,index) => <p className="summary-warning" key={index}>{message}</p>)}
                 </div>}
               </div>

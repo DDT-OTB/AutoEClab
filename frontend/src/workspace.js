@@ -3,6 +3,7 @@ import {workflowToEditor,workflowSequence} from './workflow.js';
 export const workspacePages={
   run:{label:'实验运行',title:'载入流程，监测实验',subtitle:'流程执行与设备状态'},
   plans:{label:'实验方案',title:'设计与管理实验方案',subtitle:'文件管理与功能块编排'},
+  data:{label:'数据管理',title:'查看实验测量数据',subtitle:'CV 曲线、采集记录与数据下载'},
   history:{label:'运行记录',title:'查看每次实验的记录',subtitle:'执行结果与历史事件'},
 };
 export function workspacePage(hash='') {

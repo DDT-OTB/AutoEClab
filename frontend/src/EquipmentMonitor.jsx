@@ -26,7 +26,7 @@ function DeviceDetails({ item, fresh }) {
       <div><h4>{item.name}</h4><code>{item.id}</code></div>
     </div>
     <div className="device-detail-state"><EquipmentState activity={activity}/><span>{equipmentStatusSource(item,fresh)}</span></div>
-    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数可在“实验方案”中设置。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : <>
+    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数可在“实验方案”中设置。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : config.kind==='electrochemical'?<div className="station-reserved-note"><Radio size={21}/><strong>EC110 · 循环伏安法</strong><p>{programActivity?'工作站正在按本次参数快照执行。测量曲线显示在实验运行页，采集数据自动归档。':'在实验方案中添加 CV 动作，运行时由后端验证身份并采集数据。'}</p><span>{activity.point_count!==undefined?activity.point_count.toLocaleString()+' 个已采集数据点':device?.port_present?'串口节点存在，运行时校验仪器':'请检查工作站串口连接'}</span></div>:<>
       {programActivity ? <section className="equipment-current-action" aria-label="本次程序动作">
         <div className="detail-section-title"><span>本次程序动作</span><strong>{operationLabels[activity.operation] || activity.label}</strong></div>
         <div className="current-action-target">{typeof activity.volume_ml==='number' ? <><strong>{activity.volume_ml}</strong><span>mL · 目标体积</span></> : <strong>{routeName(activity.route) || '设备动作'}</strong>}</div>
@@ -67,7 +67,7 @@ export default function EquipmentMonitor({ items, selectedItem, fresh, onSelect,
       <div className="equipment-monitor-summary" aria-label="设备状态汇总">
         {[['working','工作中'],['idle','空闲 / 完成'],['attention','需关注'],['unknown','待确认']].map(([key,label])=><div className={'monitor-count count-'+key} key={key}><strong>{summary[key]}</strong><span>{label}</span></div>)}
       </div>
-      <div className="equipment-list-heading"><span>{summary.total} 台设备<span className="monitor-reserved-count">+ {summary.reserved} 个测量预留</span></span><span>点击查看详情</span></div>
+      <div className="equipment-list-heading"><span>{summary.total} 台设备{summary.reserved>0 && <span className="monitor-reserved-count">+ {summary.reserved} 个测量预留</span>}</span><span>点击查看详情</span></div>
       <div className="equipment-monitor-list" aria-label="设备列表">{items.map(item=><button className={'equipment-monitor-row tone-'+item.tone} type="button" key={item.id} onClick={()=>onSelect(item.id)} aria-label={'查看'+item.name+'的状态详情'}>
         <span className="monitor-device-icon"><ActionIcon kind={item.config.kind} size={18}/></span>
         <span className="monitor-row-identity"><strong>{item.name}</strong><small>{item.group} · {deviceQuickInfo(item)}</small></span>
