@@ -29,6 +29,8 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     compiler = importlib.import_module('lab_automation.templates')
     controller = importlib.import_module('lab_automation.__main__')
     operation = snapshot.get('operation', 'sequence')
+    from .syringe_batch import validate_snapshot_policy
+    validate_snapshot_policy(snapshot)
     if operation not in ('sequence', 'debug_sequence', 'calibrate_syringe', 'drain_cell'):
         raise ValueError('Unsupported controller operation')
     if snapshot.get('safety_policy') != load_policy(snapshot.get('fluidic_topology')):
@@ -75,6 +77,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
 
     def event(kind, **fields):
         nonlocal cleanup_failed, serial_requests, completed_step_count, active_plan_step
+        if kind in ('step_started','syringe_stroke_started'):validate_snapshot_policy(snapshot)
         if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'step_started':
             if load_policy(snapshot.get('fluidic_topology')) != snapshot['safety_policy']:
                 raise ValueError('Cell safety policy changed during execution')
@@ -120,7 +123,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                             'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
                         publish(initialization_verified=True,water_source_verified=result['water_source_verified'],water_channel=result['water_channel'])
                     else:
-                        if operation=='debug_sequence' or any(step['action'] == 'measurement' for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
+                        if operation=='debug_sequence' or any(step['action'] == 'measurement' or step.get('stroke_plan') for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
                             if (operation not in ('sequence','debug_sequence') and any(step['action'] == 'measurement' for step in plan['steps'])) or runner_factory is not None:
                                 raise ValueError('Mixed CV execution requires the fixed workstation adapter')
                             from .mixed_runner import run_mixed

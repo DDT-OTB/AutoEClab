@@ -90,6 +90,7 @@ def validate_measurement(step):
 
 
 def compile_workflow(sequence, devices, templates, compiler, config, station=None, topology=None, debug=False):
+    from .syringe_batch import compile_native_plan
     sequence = flatten_sequence(sequence)
     config.keys(sequence, {"schema_version","id","description","steps","notes"},
                 {"schema_version","id","description","steps"}, "总流程")
@@ -103,7 +104,7 @@ def compile_workflow(sequence, devices, templates, compiler, config, station=Non
     if debug and any(is_homing(step) for step in steps):
         return compile_legacy_debug(sequence, devices, templates, compiler, config, station)
     if not any(is_measurement(step) for step in steps):
-        return config.compile_plan(devices,compiler.expand_sequence(sequence,templates))
+        return compile_native_plan(devices,compiler.expand_sequence(sequence,templates),config)
     pump_steps, measurement_steps, ids = [], {}, set()
     for index, step in enumerate(steps,1):
         if not isinstance(step,dict):
@@ -133,7 +134,7 @@ def compile_workflow(sequence, devices, templates, compiler, config, station=Non
             pump_steps.append({**step,"id":name})
     if pump_steps:
         expanded = compiler.expand_sequence({**sequence,"steps":pump_steps},templates)
-        plan = config.compile_plan(devices,expanded)
+        plan = compile_native_plan(devices,expanded,config)
     else:
         plan = {"sequence_id":sequence["id"],"description":sequence["description"],"steps":[],
                 "totals":{"dose_ml_by_device":{},"syringe_ml_by_device":{},"drain_nominal_ml":0,"drain_equivalent_ml":0},

@@ -34,6 +34,9 @@ class PseudoPump:
         self.stop_error = False
         self.commands = []
         self.ignore_switch = False
+        self.pause_target = None
+        self.fail_target = None
+        self.after_move = None
         self.closed = threading.Event()
         self.thread = threading.Thread(target=self.serve, daemon=True); self.thread.start()
 
@@ -48,7 +51,7 @@ class PseudoPump:
                     while b'\r' in pending:
                         packet, pending = pending.split(b'\r', 1)
                         command = packet[2:].decode('ascii'); self.commands.append(command)
-                        payload = ''
+                        payload = ''; move_target=None
                         if command == '?': payload = str(self.position)
                         elif command == '?10': payload = self.buffer_state
                         elif command == '?202': payload = self.serial_number
@@ -57,9 +60,13 @@ class PseudoPump:
                         elif command == 'OR': self.valve_position = 'o'
                         elif command == 'ZR':
                             self.homing_count += 1; self.position = 0; self.valve_position = 'o'; self.buffer_state = '0'
+                        elif command == 'T':self.busy=False
                         elif re.fullmatch(r'v[0-9]+V[0-9]+A[0-9]+R', command):
-                            self.position = int(re.search(r'A([0-9]+)', command).group(1)); self.positions.append(self.position)
+                            self.position = int(re.search(r'A([0-9]+)', command).group(1)); self.positions.append(self.position);move_target=self.position
+                            if self.pause_target==move_target:self.busy=True
+                            if self.after_move:self.after_move(move_target)
                         status = (0x40 if self.busy else 0x60) | ((self.homing_error if self.homing_count else self.initial_error) if command=='Q' else 0)
+                        if move_target is not None and self.fail_target==move_target:status|=3
                         os.write(self.master, b'/0' + bytes([status]) + payload.encode() + b'\x03\r\n')
                     continue
                 while len(pending) >= 8:

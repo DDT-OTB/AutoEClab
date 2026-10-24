@@ -35,10 +35,11 @@ function DeviceDetails({ item, fresh,measurement,onOpenMeasurement }) {
       {programActivity ? <section className="equipment-current-action" aria-label="本次程序动作">
         <div className="detail-section-title"><span>本次程序动作</span><strong>{operationLabels[activity.operation] || activity.label}</strong></div>
         <div className="current-action-target">{typeof activity.volume_ml==='number' ? <><strong>{activity.volume_ml}</strong><span>mL · 目标体积</span></> : <strong>{routeName(activity.route) || '设备动作'}</strong>}</div>
+        {activity.stroke_count>1 && <p className="detail-note">第 {activity.stroke_index} / {activity.stroke_count} 次 · 本次 {activity.stroke_volume_ml ?? '—'} mL · 已完成分次标称量 {activity.completed_nominal_ml ?? 0} / {activity.volume_ml} mL</p>}
         {activity.state==='executing' && <>
           <div className="equipment-progress-label"><span>已用 {formatDuration(activity.elapsed_seconds)}</span><span>{percent===null?'正在执行':'估算进度 '+percent+'%'}</span></div>
           {percent!==null && <div className="equipment-progress" role="progressbar" aria-label="估算动作进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{width:percent+'%'}}/></div>}
-          <p className="detail-note">进度按程序计时估算，体积不是流量传感器实测值。</p>
+          <p className="detail-note">{activity.stroke_count>1?'进度按已完成分次累计；体积按活塞步数换算，非流量传感器实测。':'进度按程序计时估算，体积不是流量传感器实测值。'}</p>
         </>}
       </section> : <div className="equipment-current-note"><CircleHelp size={15}/><p>{activity.state==='busy' ? '设备最近返回工作中；当前没有关联的程序动作，暂无法确定目标体积与进度。' : !fresh ? '状态连接已中断，等待重新获取数据。' : hardware?.stale ? '最近的设备读数已过期，可点击刷新重新读取。' : '当前没有正在执行的程序动作。'}</p></div>}
       {currentHardware && ['idle','busy','not_ready'].includes(hardware.state) && <dl className="equipment-readings">

@@ -88,8 +88,11 @@ class LabRepository:
         return load_policy(self.topology)
 
     def health(self):
+        from .syringe_batch import load_policy as syringe_policy
         return {
-            "ok": True, "service": "pump-console", "version": "0.15.2",
+            "ok": True, "service": "pump-console", "version": "0.15.3",
+            "syringe_max_stroke_volume_ml": syringe_policy()['max_stroke_volume_ml'],
+            "syringe_multi_stroke_supported": True,
             "syringe_homing_requires_verified_water": True,
             "debug_workflows_supported": True,
             "mandatory_preflight_block": True,
@@ -372,6 +375,10 @@ class LabRepository:
             values = [str(index), step["device"], step["operation"], step.get("fluid", "—"),
                       str(step.get("volume_ml", step.get("route", step.get("technique", "—"))))]
             rows.append("| " + " | ".join(value.replace("|", r"\|") for value in values) + " |")
+            compiled=preview['plan']['steps'][index-1]
+            if compiled.get('stroke_plan'):
+                parts=' + '.join(str(stroke['volume_ml']) for stroke in compiled['stroke_plan'])
+                measurement_blocks.append(f"\n\n第 {index} 步注射总量 {step['volume_ml']} mL，自动分为 {parts} mL；每次完成位置回读后再继续。\n")
             if is_measurement(step):
                 integration = 'EC110 已配置' if self.station['enabled'] else '尚未接入工作站'
                 measurement_blocks.append(f"\n\n### 第 {index} 步：循环伏安法参数（{integration}）\n\n" +

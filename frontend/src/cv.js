@@ -67,7 +67,12 @@ export function stepSummary(step, template) {
   if (template?.device.kind === 'valve')
     return ({water:'水',electrolyte:'电解液',waste:'废液瓶',waste_1:'废液 1',waste_2:'废液 2'}[step.route] || step.route || '流路待选择') +
       ' · 通道 ' + (template.device.routes[step.route] ?? '?');
-  return (step.volume_ml === '' || step.volume_ml === undefined ? '体积待填写' : step.volume_ml + ' mL') +
+  let batches='';
+  if(template?.device.kind==='syringe') {
+    try {const parts=syringeStrokes(step.volume_ml,template);if(parts.length>1)batches=' · '+parts.join(' + ')+' mL';}catch{}
+  }
+  return (step.volume_ml === '' || step.volume_ml === undefined ? '体积待填写' : step.volume_ml + ' mL') +batches+
     (template?.device.rpm ? ' · ' + template.device.rpm + ' rpm' :
       template?.device.speed_steps_s ? ' · ' + template.device.speed_steps_s + ' 步/秒' : '');
 }
+import {syringeStrokes} from './syringe.js';

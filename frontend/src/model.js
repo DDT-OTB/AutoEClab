@@ -3,6 +3,7 @@ import { cellVolumes, defaultSafetyPolicy } from './cellSafety.js';
 import { flattenSequence, workflowSequence, workflowErrors, workflowToEditor, uiKey } from './workflow.js';
 import {preflightErrors} from './preflight.js';
 import {isDebug,modeFields} from './workflowMode.js';
+import {syringeStrokes} from './syringe.js';
 export { uiKey } from './workflow.js';
 export const fluidLabels = { water: '超纯水', waste_liquid: '废液', sulfuric_acid: '硫酸', electrolyte: '电解液' };
 export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量',initialize:'机械回零' };
@@ -69,7 +70,9 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
       if (template.action.type === 'drain' && template.action.routing_mode!=='direct' && !routes[template.action.valve_device]) errors.push(prefix + '抽液前，请先选择废液流路。');
       if (template.action.source_valve && routes[template.action.source_valve]!==step.fluid && !(isDebug(draft) && !routes[template.action.source_valve])) errors.push(prefix+'注射泵吸液前，请先选择相符入口：水为 5，电解液为 6。');
       if(isDebug(draft) && template.action.source_valve && !routes[template.action.source_valve])routes[template.action.source_valve]=step.fluid;
-      if (template.device.kind === 'syringe' && step.volume_ml > template.device.capacity_ml) errors.push(prefix + '超出注射泵容量。');
+      if (template.device.kind === 'syringe') {
+        try{syringeStrokes(step.volume_ml,template);}catch(error){errors.push(prefix+error.message);}
+      }
     }
   });
   return [...errors,...cellVolumes(toSequence(draft),safetyPolicy,templates).errors];

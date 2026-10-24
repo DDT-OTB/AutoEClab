@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "max_stroke_volume_ml": 20,
+  "max_strokes_per_action": 128
+}

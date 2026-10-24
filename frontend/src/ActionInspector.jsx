@@ -3,6 +3,8 @@ import { ArrowDown, ArrowRight, CircleHelp, LockKeyhole, MousePointer2 } from 'l
 import { ActionIcon } from './FlowStep.jsx';
 import { cvDuration, cvErrors, cvWaveform, isMeasurement } from './cv.js';
 import { fluidLabels, formatDuration, operationLabels } from './model.js';
+import {syringeStrokes} from './syringe.js';
+import syringePolicy from '../../config/syringe_policy.json' with {type:'json'};
 
 function NumberField({ label, value, onChange, unit, scale = 1, step = 'any', min, max }) {
   const display = typeof value === 'number' && Number.isFinite(value) ? Number((value*scale).toPrecision(12)) : '';
@@ -30,6 +32,7 @@ function VoltageProgram({ parameters }) {
 export default function ActionInspector({ step, template, index, title, onChange,debug=false }) {
   if (!step || !template) return <div className="inspector-empty"><MousePointer2 size={29} /><h3>选择一个动作</h3><p>点击流程节点，在这里编辑参数。</p></div>;
   const measurement = isMeasurement(step), config = template.device, p = step.parameters || {};
+  let strokes=[];try{strokes=syringeStrokes(step.volume_ml,template);}catch{}
   const updateParameter = (key,value) => onChange({ parameters: { ...p, [key]: value } });
   return <div className="action-parameter-editor">
     <div className={'action-editor-heading fluid-' + (measurement ? 'measurement' : step.fluid || 'valve')}>
@@ -65,9 +68,9 @@ export default function ActionInspector({ step, template, index, title, onChange
         <div className="parameter-route-preview"><span>切换阀</span><ArrowRight size={17} /><strong>通道 {config.routes[step.route] ?? '?'}</strong></div>
       </> : <>
         {template.action.allowed_fluids && <label className="parameter-field"><span>注入液体</span><select value={step.fluid} aria-label="注射泵注入液体" onChange={event=>onChange({fluid:event.target.value})}>{template.action.allowed_fluids.map(fluid=><option key={fluid} value={fluid}>{fluidLabels[fluid] || fluid}</option>)}</select></label>}
-        <NumberField label={step.operation === 'withdraw' ? '抽出体积' : '注入体积'} value={step.volume_ml} onChange={value => onChange({volume_ml:value})} unit="mL" min="0.001" max={config.capacity_ml} step="0.1" />
+        <NumberField label={step.operation === 'withdraw' ? '抽出体积' : config.kind==='syringe'?'注入总体积':'注入体积'} value={step.volume_ml} onChange={value => onChange({volume_ml:value})} unit="mL" min="0.001" max={config.kind==='syringe'?undefined:config.capacity_ml} step="0.1" />
         <div className="parameter-flow-direction"><span>{step.operation === 'withdraw' ? '电解池' : fluidLabels[step.fluid] || step.fluid}</span><ArrowRight size={18} /><strong>{step.operation === 'withdraw' ? template.action.routing_mode==='direct'?'废液瓶':'所选废液流路' : '电解池'}</strong></div>
-        {config.kind === 'syringe' && <p className="parameter-hint">注射泵会先从储液侧吸入，再向电解池注入所填体积；容量为 {config.capacity_ml} mL。</p>}
+        {config.kind === 'syringe' && <><p className="parameter-hint">填写总量。注射器容量为 {config.capacity_ml} mL；每次最多 {template.action.max_stroke_volume_ml ?? syringePolicy.max_stroke_volume_ml} mL，按“吸液 → 注入 → 位置回读”顺序分次完成。</p>{strokes.length>0 && <p className="parameter-hint">执行计划：{strokes.length} 次 · {strokes.join(' + ')} mL。电解池累计液量仍需通过容量校验。</p>}</>}
         {debug && template.action.source_valve && <p className="parameter-hint">未编排切阀动作时，将回读当前入口是否与所选液体一致；不匹配则停止，不会自动切阀或回零。</p>}
         {template.action.type === 'drain' && <p className="parameter-hint">按系统设置增加 {Math.round(template.action.extra_time_fraction*100)}% 排液时间；{template.action.routing_mode==='direct'?'排液泵直接连接废液瓶，不切换注射泵入口阀。':'抽液前需先选择废液流路。'}</p>}
       </>}

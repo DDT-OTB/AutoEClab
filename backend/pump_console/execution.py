@@ -153,6 +153,9 @@ class ExecutionManager:
         if any(step.get('action') == 'measurement' for step in plan['steps']):
             from copy import deepcopy
             snapshot['station'] = deepcopy(self.repository.station)
+        if any(step.get('action')=='syringe_transfer' for step in plan['steps']):
+            from .syringe_batch import load_policy
+            snapshot['syringe_policy']=load_policy()
         fingerprint = version(snapshot)
         with self.lock:
             folder = self._folder(run_id)
@@ -368,6 +371,7 @@ class ExecutionManager:
         if job['state'] != 'prepared' or job['version'] != expected_version:
             raise ApiError(409, '方案准备记录已变化，请重新准备。', 'version_conflict')
         snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+        self._syringe_policy_unchanged(snapshot)
         if version(snapshot) != expected_version or snapshot.get('safety_policy') != self.repository.safety_policy():
             raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
         if 'station' in snapshot and snapshot['station'] != self.repository.station:
@@ -445,6 +449,7 @@ class ExecutionManager:
             if calibration['state'] in ('running', 'passed'):
                 return {'run_id': run_id, 'accepted': True, 'already_started': True, 'calibration': calibration}
             snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+            self._syringe_policy_unchanged(snapshot)
             try:
                 require_preflight(snapshot['sequence'], snapshot['safety_policy'])
             except ValueError as error:
@@ -529,6 +534,12 @@ class ExecutionManager:
             if not stat.S_ISCHR(mode) or not os.access(path, os.R_OK | os.W_OK):
                 raise ApiError(422, name + '：串口类型或访问权限不符合要求。', 'serial_port_unavailable')
 
+    @staticmethod
+    def _syringe_policy_unchanged(snapshot):
+        from .syringe_batch import validate_snapshot_policy
+        try:validate_snapshot_policy(snapshot)
+        except ValueError as error:raise ApiError(409,str(error),'syringe_policy_changed') from error
+
     def start_debug(self, run_id, expected_version, actor, confirm_setup, confirm_homing_discharge=False):
         self._enabled()
         if type(confirm_setup) is not bool or type(confirm_homing_discharge) is not bool:
@@ -560,6 +571,7 @@ class ExecutionManager:
             if owner['alive'] is not False or owner['state'] not in ('idle',):
                 raise ApiError(409, '控制器或设备状态查询正在占用串口。', 'execution_busy')
             snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+            self._syringe_policy_unchanged(snapshot)
             if version(snapshot) != expected_version:
                 raise ApiError(409, '准备内容发生变化，请重新检查方案。', 'version_conflict')
             if version(self._templates()[1]) != job['templates_version']:

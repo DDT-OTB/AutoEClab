@@ -101,6 +101,8 @@ class RuntimeMonitor:
                         self.current = None
                 elif kind in ('measurement_started', 'measurement_progress') and self.current:
                     self.current['measurement'] = event
+                elif kind in ('syringe_stroke_started','syringe_stroke_completed','syringe_stroke_failed') and self.current:
+                    if event.get('step_id')==self.current['step'].get('id'):self.current['syringe_stroke']=event
                 elif kind in ('valve_position_verified','valve_already_positioned') and event.get('device')=='valve':
                     self.selector_position = {'channel':event.get('channel'),'at':event['time']}
                 elif kind in ("serial_error", "stop_failed"):
@@ -163,6 +165,11 @@ class RuntimeMonitor:
                               technique=step.get('technique'), progress_is_estimate=False,
                               progress_fraction=(min(observed.get('targets_reached', 0) / observed['target_count'], .99)
                                                  if observed.get('target_count', 0) > 0 else None))
+            if step.get('stroke_plan'):
+                observed=self.current.get('syringe_stroke',{})
+                active.update(stroke_index=observed.get('stroke_index',1),stroke_count=step['stroke_count'],
+                    stroke_volume_ml=observed.get('stroke_volume_ml'),completed_nominal_ml=observed.get('completed_nominal_ml',0),
+                    progress_fraction=min(observed.get('completed_nominal_ml',0)/step['volume_ml'],.99))
             if step.get("device") in self.faults:
                 active["state"] = "error"
                 result.update(state="error", reason="controller_error")

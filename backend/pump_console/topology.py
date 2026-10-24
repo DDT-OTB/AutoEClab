@@ -16,6 +16,12 @@ def topology_mode(value=None):
 
 def view_templates(templates, mode):
     result = deepcopy(templates)
+    from .syringe_batch import stroke_limit,load_policy
+    policy=load_policy()
+    for template in result.values():
+        if template['device']['kind']=='syringe':
+            template['action'].update(max_stroke_volume_ml=stroke_limit(template['device'],policy)[0],
+                                      max_strokes_per_action=policy['max_strokes_per_action'])
     if topology_mode(mode) == INLET:
         result['valve']['device']['routes'] = dict(SOURCE_CHANNELS)
         result['valve']['action']['role'] = 'syringe_inlet_selector'
@@ -91,6 +97,7 @@ def migrate_sequence(sequence):
 
 def compile_inlet_workflow(sequence, devices, templates, compiler, config, station, debug=False):
     from .measurement import compile_workflow, is_measurement
+    from .syringe_batch import compile_native_plan
     doc, source = deepcopy(devices), deepcopy(templates)
     doc['devices']['valve']['routes'] = dict(SOURCE_CHANNELS)
     source['valve']['device']['routes'] = dict(SOURCE_CHANNELS)
@@ -142,7 +149,7 @@ def compile_inlet_workflow(sequence, devices, templates, compiler, config, stati
                 plan = compile_workflow(singleton, doc, local, compiler, config, station)
                 measurement_count += 1
             else:
-                plan = config.compile_plan(doc, compiler.expand_sequence(singleton, local))
+                plan = compile_native_plan(doc, compiler.expand_sequence(singleton, local),config)
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f'第 {index} 步：{exc}') from exc
         item = plan['steps'][0]

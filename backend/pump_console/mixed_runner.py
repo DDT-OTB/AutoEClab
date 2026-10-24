@@ -15,6 +15,9 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
     measuring = any(step['action'] == 'measurement' for step in plan['steps'])
     session = station_factory(station, event) if measuring else None
     store = MeasurementStore(data_root) if measuring else None
+    def syringe_strokes(name):
+        return [stroke for step in pump_plan['steps'] if step['device']==name and step['action']=='syringe_transfer'
+                for stroke in (step.get('stroke_plan') or [step])]
     def cleanup_event(kind, **fields):
         try:
             event(kind, **fields)
@@ -41,8 +44,7 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
                 if execution_mode=='debug_sequence' and first['action']=='initialize_syringe':
                     event('preflight_deferred_for_explicit_homing',device=name)
                     continue
-                device.preflight([step for step in pump_plan['steps']
-                                  if step['device'] == name and step['action'] == 'syringe_transfer'])
+                device.preflight(syringe_strokes(name))
             else:
                 device.preflight()
             event('preflight_passed', device=name)
@@ -70,17 +72,39 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
                 elif action == 'switch_valve':
                     device.goto(step['channel'])
                 elif action == 'syringe_transfer':
-                    if step.get('requires_source'):
-                        source = step['requires_source']
-                        valve = runner.devices[source['device']]
-                        if not valve.normal() or valve.channel() != source['channel']:
-                            raise ValueError('注射泵吸液前回读的入口通道与液体不匹配，未开始吸液。')
-                        event('valve_position_verified',device=source['device'],channel=source['channel'],source='syringe_inlet_precheck')
-                    device.transfer(step)
+                    strokes=step.get('stroke_plan') or [step]
+                    completed=0.0
+                    for number,stroke in enumerate(strokes,1):
+                        if len(strokes)>1:
+                            event('syringe_stroke_started',device=step['device'],step_id=step['id'],
+                                stroke_index=number,stroke_count=len(strokes),stroke_volume_ml=stroke['volume_ml'],
+                                completed_nominal_ml=completed,total_volume_ml=step['volume_ml'])
+                        transfer_started=False
+                        try:
+                            if step.get('requires_source'):
+                                source = step['requires_source']
+                                valve = runner.devices[source['device']]
+                                if not valve.normal() or valve.channel() != source['channel']:
+                                    raise ValueError('注射泵吸液前回读的入口通道与液体不匹配，未开始吸液。')
+                                event('valve_position_verified',device=source['device'],channel=source['channel'],source='syringe_inlet_precheck')
+                            transfer_started=True
+                            device.transfer(stroke)
+                        except BaseException as error:
+                            if len(strokes)>1:
+                                cleanup_event('syringe_stroke_failed',device=step['device'],step_id=step['id'],
+                                    stroke_index=number,stroke_count=len(strokes),stroke_volume_ml=stroke['volume_ml'],
+                                    completed_nominal_ml=completed,total_volume_ml=step['volume_ml'],
+                                    current_stroke_volume_unknown=transfer_started,message=str(error))
+                            raise
+                        completed+=stroke['volume_ml']
+                        if len(strokes)>1:
+                            event('syringe_stroke_completed',device=step['device'],step_id=step['id'],
+                                stroke_index=number,stroke_count=len(strokes),stroke_volume_ml=stroke['volume_ml'],
+                                completed_nominal_ml=completed,total_volume_ml=step['volume_ml'])
                 elif action == 'initialize_syringe' and execution_mode=='debug_sequence':
                     from .syringe_initialization import initialize
                     initialize(devices,{**plan,'steps':[step]},event,existing_pump=device,manage_sequence=False)
-                    device.preflight([value for value in pump_plan['steps'] if value['device']==step['device'] and value['action']=='syringe_transfer'])
+                    device.preflight(syringe_strokes(step['device']))
                 elif action == 'wait':
                     runner.sleep(step['seconds'])
                 else:
