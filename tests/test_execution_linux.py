@@ -33,6 +33,7 @@ class PseudoPump:
         self.initial_error = 0
         self.stop_error = False
         self.commands = []
+        self.ignore_switch = False
         self.closed = threading.Event()
         self.thread = threading.Thread(target=self.serve, daemon=True); self.thread.start()
 
@@ -68,7 +69,7 @@ class PseudoPump:
                     function = packet[2]; self.commands.append(function)
                     if function in (0x47, 0x48): self.busy = True
                     if function == 0x49 and not self.stop_error: self.busy = False
-                    if function == 0x44: self.channel = int.from_bytes(packet[3:5], 'little')
+                    if function == 0x44 and not self.ignore_switch: self.channel = int.from_bytes(packet[3:5], 'little')
                     status = 5 if function == 0x49 and self.stop_error else 4 if function == 0x4A and self.busy else 0
                     value = self.channel if function == 0x3E else 0
                     body = bytes((0xCC, packet[1], status, value, 0, 0xDD))
@@ -332,7 +333,7 @@ class LinuxExecutionTests(unittest.TestCase):
         for name in ('peristaltic_1','peristaltic_2','peristaltic_3'):self.assertEqual(instruments[name].commands, [])
 
     def test_drain_alone_never_authorizes_start_and_duplicate_requests_do_not_repeat_motion(self):
-        self.sequence['preflight']['steps'][1]['route']='waste_2'
+        self.sequence['preflight']['steps'][2]['route']='waste_2'
         _,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
         body={'run_id':prepared['run_id'],'version':prepared['version'],'route':'waste_2','confirm_discharge':True,'request_id':'unique_drain_one'}
         self.assertEqual(self.request('POST','/api/execution/confirm-empty',{'run_id':prepared['run_id'],'version':prepared['version'],'empty_confirmed':True})[0],409)
@@ -395,5 +396,6 @@ class LinuxExecutionTests(unittest.TestCase):
         self.wait_for(lambda:self.repo.execution.preparation_status(prepared['run_id'])['workflow']['phase']=='failed')
         self.assertEqual(self.request('POST','/api/execution/advance',body)[0],409)
         self.assertEqual(instruments['syringe_c'].homing_count,1)
-        for name in ('peristaltic_1','peristaltic_2','peristaltic_3','valve'):
+        for name in ('peristaltic_1','peristaltic_2','peristaltic_3'):
             self.assertEqual(instruments[name].commands,[])
+        self.assertEqual(instruments['valve'].channel,5)

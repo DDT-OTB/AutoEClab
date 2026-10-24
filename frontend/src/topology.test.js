@@ -43,14 +43,14 @@ test('CV graphs are embedded inside the workstation status details',()=>{
   assert.doesNotMatch(html,/class="measurement-results"/);
 });
 test('inlet workflows require explicit matching fluid selection while direct drains need no selector',()=>{
-  const preflight=defaultPreflight();preflight.steps[1].route='waste';
+  const preflight=defaultPreflight();preflight.steps[2].route='waste';
   const sequence={schema_version:2,id:'source_test',description:'Synthetic inlet workflow',preflight,steps:[{device:'peristaltic_2',operation:'withdraw',fluid:'waste_liquid',volume_ml:1}]};
   assert.deepEqual(draftErrors(sequence,templates,policy),[]);
   sequence.steps.push({device:'syringe_c',operation:'inject',fluid:'water',volume_ml:1});
   assert.ok(draftErrors(sequence,templates,policy).some(text=>text.includes('相符入口')));
   sequence.steps.splice(1,0,{device:'valve',operation:'switch_route',route:'water'});
   assert.deepEqual(draftErrors(sequence,templates,policy),[]);
-  assert.equal(workflowToEditor({...sequence,preflight:defaultPreflight()},policy).blocks[0].steps[1].route,'waste');
+  assert.equal(workflowToEditor({...sequence,preflight:defaultPreflight()},policy).blocks[0].steps[2].route,'waste');
 });
 test('only an administrator can request deletion and active records stay disabled',()=>{
   const record={id:'cv-'+'a'.repeat(32),sequence_id:'synthetic',state:'completed',version:'a'.repeat(64)};

@@ -89,7 +89,8 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.15.1",
+            "ok": True, "service": "pump-console", "version": "0.15.2",
+            "syringe_homing_requires_verified_water": True,
             "debug_workflows_supported": True,
             "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,

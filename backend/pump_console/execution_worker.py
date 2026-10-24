@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from .execution import RUN_ID, initialization_plan, version, write_private
+from .execution import RUN_ID, water_calibration_plan, version, write_private
 from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
@@ -56,7 +56,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Explicit discharge confirmation is required for calibration')
         config.validate_devices(snapshot['devices'])
-    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'), snapshot.get('fluidic_topology'),debug=sequence_mode(snapshot['sequence'])=='debug')
+    plan = water_calibration_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'), snapshot.get('fluidic_topology'),debug=sequence_mode(snapshot['sequence'])=='debug')
     if plan != snapshot['plan'] or plan['unresolved'] or not plan['ready_for_hardware']:
         raise ValueError('Prepared plan did not pass controller validation')
     logs = root / 'logs/automation'
@@ -75,19 +75,22 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
 
     def event(kind, **fields):
         nonlocal cleanup_failed, serial_requests, completed_step_count, active_plan_step
-        if operation in ('sequence','debug_sequence') and kind == 'step_started':
+        if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'step_started':
             if load_policy(snapshot.get('fluidic_topology')) != snapshot['safety_policy']:
                 raise ValueError('Cell safety policy changed during execution')
             if active_plan_step is not None or completed_step_count >= len(plan['steps']) or fields.get('step') != plan['steps'][completed_step_count]:
                 raise ValueError('Controller step does not match the validated sequence')
             active_plan_step = fields['step']
-        if operation in ('sequence','debug_sequence') and kind == 'step_completed':
+            if operation=='calibrate_syringe':publish(phase='selecting_water' if fields['step']['device']=='valve' else 'homing')
+        if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'step_completed':
             if active_plan_step is None or fields.get('id') != active_plan_step['id']:
                 raise ValueError('Controller completion does not match the active step')
             completed_step_count += 1
             active_plan_step = None
-        if operation in ('sequence','debug_sequence') and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
+        if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
             raise ValueError('Controller reported completion before all validated steps finished')
+        if operation=='calibrate_syringe' and kind=='syringe_water_source_verified':
+            publish(water_source_verified=True,water_channel=fields['channel'])
         if kind in ('serial_reply', 'serial_error'):
             serial_requests += 1
         if kind == 'stop_failed':
@@ -108,14 +111,14 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                     event('automation_started', actor=job['started_by'], run_id=run_id)
                     publish(state='running')
                     if operation == 'calibrate_syringe':
-                        from .syringe_initialization import initialize
-                        result = initialize(snapshot['devices']['devices'], plan, event)
+                        from .syringe_initialization import initialize_with_water
+                        result = initialize_with_water(snapshot['devices']['devices'], plan, event)
                         directory = Path(run_directory).resolve().parent / 'instruments'
                         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
                         write_private(directory / 'syringe_c.json', {**result, 'device_id': 'syringe_c', 'status': 'initialized',
                             'requires_initialization': False, 'initialized_at': datetime.now(timezone.utc).isoformat(),
                             'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
-                        publish(initialization_verified=True)
+                        publish(initialization_verified=True,water_source_verified=result['water_source_verified'],water_channel=result['water_channel'])
                     else:
                         if operation=='debug_sequence' or any(step['action'] == 'measurement' for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
                             if (operation not in ('sequence','debug_sequence') and any(step['action'] == 'measurement' for step in plan['steps'])) or runner_factory is not None:

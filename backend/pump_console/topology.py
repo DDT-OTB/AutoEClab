@@ -60,9 +60,10 @@ def migrate_steps(steps, default_fluid='electrolyte'):
 
 
 def migrate_block(block):
-    value = deepcopy(block)
+    from .preflight import upgrade_preflight_block
+    value = upgrade_preflight_block(block)
     if value.get('type') == 'preflight':
-        value['steps'][1]['route'] = 'waste'
+        next(step for step in value['steps'] if step['operation']=='drain_to_waste')['route'] = 'waste'
     else:
         value['steps'] = migrate_steps(value['steps'])
         if value.get('id') in ('drain_waste_1', 'drain_waste_2'):

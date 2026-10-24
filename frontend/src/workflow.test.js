@@ -17,7 +17,7 @@ test('two-level roundtrip retains every block and action while stripping editor 
   const draft=workflowToEditor(experiment);
   assert.equal(draft.blocks.length,5);
   assert.deepEqual(workflowSequence(draft),experiment);
-  assert.equal(new Set(draft.blocks.flatMap(block=>[block._key,...block.steps.map(step=>step._key)])).size,17);
+  assert.equal(new Set(draft.blocks.flatMap(block=>[block._key,...block.steps.map(step=>step._key)])).size,18);
   assert.doesNotMatch(JSON.stringify(workflowSequence(draft)),/_key/);
   assert.deepEqual(draftErrors(draft,deviceTemplates),[]);
 });

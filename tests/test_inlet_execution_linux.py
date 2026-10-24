@@ -26,8 +26,9 @@ class InletExecutionTests(unittest.TestCase):
         base.LinuxExecutionTests.tearDown(self)
 
     def empty_cell(self, prepared, route='waste', request_id='direct_drain'):
+        before=list(self.preflight_devices['valve'].commands)
         base.LinuxExecutionTests.empty_cell(self, prepared, route, request_id)
-        self.assertEqual(self.preflight_devices['valve'].commands, [],
+        self.assertEqual(self.preflight_devices['valve'].commands, before,
                          'Direct startup drain must not even open the inlet selector')
 
     def add_syringe(self):
@@ -77,10 +78,14 @@ class InletExecutionTests(unittest.TestCase):
         syringe = self.add_syringe(); self.preflight_devices['valve'].busy = True
         self.sequence['steps'] = [dict(device='valve', operation='switch_route', route='electrolyte'),
             dict(device='syringe_c', operation='inject', fluid='electrolyte', volume_ml=.1)]
-        self.start()
+        code,prepared=self.request('POST','/api/execution/prepare',{'sequence':self.sequence})
+        self.assertEqual(code,200,prepared)
+        code,result=self.request('POST','/api/execution/calibrate',{'run_id':prepared['run_id'],'version':prepared['version'],'confirm_discharge':True})
+        self.assertEqual(code,200,result)
         self.wait_for(lambda: self.repo.execution.snapshot()['current']['state'] == 'failed')
         self.wait_for(lambda: not self.repo.execution.snapshot()['current']['controller_alive'])
         self.assertEqual(syringe.positions, [])
+        self.assertEqual(syringe.homing_count,0)
         self.assertNotIn(0x44, self.preflight_devices['valve'].commands)
 
 

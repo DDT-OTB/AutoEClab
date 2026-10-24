@@ -18,14 +18,14 @@ test('preflight presence and order are enforced by type rather than names or sto
   assert.deepEqual(preflightErrors(value),[]);
   value.blocks.shift();assert.match(preflightErrors(value).join(' '),/前置准备/);
   value.blocks.unshift({...defaultPreflight(),id:'any_valid_id'});assert.deepEqual(preflightErrors(value),[]);
-  value.blocks[0].steps[2].confirmed=true;assert.match(preflightErrors(value).join(' '),/不可修改/);
+  value.blocks[0].steps[3].confirmed=true;assert.match(preflightErrors(value).join(' '),/不可修改/);
   assert.throws(()=>importBlock(exportBlock({...defaultPreflight(),steps:defaultPreflight().steps.reverse()})));
 });
 test('preflight JSON contains no reusable operator acknowledgement and supports only the waste route setting',()=>{
-  const block=defaultPreflight();block.steps[1].route='waste_2';
-  const value=importBlock(exportBlock(block));assert.equal(value.steps[1].route,'waste_2');
+  const block=defaultPreflight();block.steps[2].route='waste_2';
+  const value=importBlock(exportBlock(block));assert.equal(value.steps[2].route,'waste_2');
   assert.doesNotMatch(JSON.stringify(value),/confirmed|confirm_discharge|empty_confirmed/);
-  block.steps[1].route='waste_3';assert.throws(()=>importBlock(exportBlock(block)));
+  block.steps[2].route='waste_3';assert.throws(()=>importBlock(exportBlock(block)));
 });
 test('automatic advancement is limited to the authorized preparation and never confirms the empty cell',()=>{
   const prepared={sequence,workflow:{authorized:true,phase:'ready_to_drain',needs_advance:true}};
@@ -44,4 +44,17 @@ test('workflow requests carry a frozen identity and separate live operator ackno
     {run_id:'run',version:'version',confirm_discharge:false,empty_confirmed:false},
     {run_id:'run',version:'version',confirm_discharge:false,empty_confirmed:true}]);
   for(const call of calls.slice(1)){assert.equal(call.path,'/api/execution/advance');assert.equal(call.options.headers['X-CSRF-Token'],'synthetic-csrf');}
+});
+test('water selection is fixed before homing and legacy files upgrade without altering experiment actions',()=>{
+  const value=structuredClone(sequence),before=structuredClone(sequence);
+  assert.equal(defaultPreflight().steps.length,4);
+  value.blocks[0].steps.shift();
+  const old=structuredClone(value),editor=workflowToEditor(value),updated=workflowSequence(editor);
+  assert.equal(editor.blocks[0].steps[0].operation,'select_syringe_water_if_used');
+  assert.equal(editor.blocks[0].steps[0].route,'water');
+  assert.equal(editor.blocks[0].steps[1].operation,'home_if_used');
+  assert.deepEqual(updated.blocks.slice(1),before.blocks.slice(1));assert.deepEqual(value,old);
+  assert.notDeepEqual(preflightErrors(old),[]);
+  updated.blocks[0].steps[0].route='electrolyte';
+  assert.throws(()=>workflowToEditor(updated));
 });

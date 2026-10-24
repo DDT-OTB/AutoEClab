@@ -33,6 +33,20 @@ def initialization_plan(devices):
             'totals': {}, 'unresolved': [], 'ready_for_hardware': True}
 
 
+def water_calibration_plan(devices):
+    plan=initialization_plan(devices)
+    valve=devices['devices'].get('valve',{})
+    if valve.get('kind')!='valve' or valve.get('routes',{}).get('water')!=5:
+        raise ValueError('回零前必须配置并确认入口阀 water 对应通道 5。')
+    plan['description']='Verify the water inlet before syringe mechanical homing'
+    home=plan['steps'][0]
+    home.update(id='step_02',index=2,requires_source={'device':'valve','route':'water','channel':5})
+    plan['steps']=[{'id':'step_01','index':1,'device':'valve','device_label':valve['label'],
+        'action':'switch_valve','operation':'switch_route','route':'water','channel':5,
+        'description':'Select water and verify inlet channel 5 before homing'},home]
+    return plan
+
+
 def encoded(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n").encode()
 
@@ -178,15 +192,18 @@ class ExecutionManager:
         calibration_folder, calibration_job = self._job(run_id)
         summary = self._summary(calibration_folder, calibration_job)
         result.update(run_id=run_id, message=summary.get('message'))
-        if summary['controller_alive']:
-            return {**result, 'state': 'running'}
         try:
             worker = parse_json((calibration_folder / 'worker.json').read_bytes())
         except FileNotFoundError:
             worker = {}
+        result.update(water_source_verified=worker.get('water_source_verified') is True,
+                      water_channel=worker.get('water_channel'),phase=worker.get('phase'))
+        if summary['controller_alive']:
+            return {**result, 'state': 'running'}
         if calibration_job['state'] == 'prepared':
             return {**result, 'state': 'required'}
-        if summary['state'] != 'completed' or worker.get('initialization_verified') is not True:
+        if (summary['state'] != 'completed' or worker.get('initialization_verified') is not True or
+                worker.get('water_source_verified') is not True or worker.get('water_channel')!=5):
             return {**result, 'state': 'failed'}
         _, current = self._current()
         completed = timestamp(worker.get('finished_at'))
@@ -438,9 +455,13 @@ class ExecutionManager:
                 raise ApiError(409, '方案或设备模板已变化，请重新准备。', 'templates_changed')
             if (datetime.now(timezone.utc) - timestamp(job['prepared_at'])).total_seconds() > self.policy['prepare_ttl_seconds']:
                 raise ApiError(409, '准备记录已过期，请重新准备。', 'preparation_expired')
-            plan = initialization_plan(snapshot['devices'])
+            try:
+                plan = water_calibration_plan(snapshot['devices'])
+            except ValueError as error:
+                raise ApiError(422,str(error),'homing_water_source_required') from error
             sequence = {'schema_version': 2, 'id': plan['sequence_id'], 'description': plan['description'],
-                        'steps': [{'device': 'syringe_c', 'operation': 'initialize'}]}
+                        'steps': [{'device':'valve','operation':'switch_route','route':'water'},
+                                  {'device': 'syringe_c', 'operation': 'initialize'}]}
             prepared = self._store_preparation(sequence, snapshot['devices'], snapshot['templates'],
                 {'plan': plan, 'valid': True, 'estimated_timed_seconds': None, 'hardware_executed': False, 'warnings': []},
                 actor, operation='calibrate_syringe', target_run_id=run_id)

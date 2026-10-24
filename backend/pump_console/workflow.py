@@ -107,7 +107,7 @@ def block_ranges(sequence):
     for block in sequence.get('blocks', []):
         if block.get('type') == 'preflight':
             result.append({'id': block['id'], 'description': block['description'], 'type': 'preflight',
-                           'step_count': 3, 'first_step': None, 'last_step': None})
+                           'step_count': len(block['steps']), 'first_step': None, 'last_step': None})
             continue
         count = len(block['steps'])
         result.append({'id': block['id'], 'description': block['description'], 'step_count': count,

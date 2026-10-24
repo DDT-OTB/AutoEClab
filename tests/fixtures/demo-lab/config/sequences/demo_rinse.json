@@ -64,6 +64,11 @@
     "description": "Home the syringe when used, drain the cell and confirm it is empty",
     "steps": [
       {
+        "device": "valve",
+        "operation": "select_syringe_water_if_used",
+        "route": "water"
+      },
+      {
         "device": "syringe_c",
         "operation": "home_if_used"
       },

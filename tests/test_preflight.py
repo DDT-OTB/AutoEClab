@@ -37,7 +37,7 @@ class PreflightTests(unittest.TestCase):
 
     def test_preflight_steps_cannot_be_reordered_forged_confirmed_or_given_arbitrary_commands(self):
         invalid=[]
-        for index,change in [(0,{'operation':'initialize'}),(0,{'command':'R'}),(1,{'volume_ml':1}),(1,{'route':'external_path'}),(2,{'confirmed':True})]:
+        for index,change in [(0,{'operation':'initialize'}),(0,{'command':'R'}),(0,{'route':'electrolyte'}),(0,{'channel':6}),(1,{'volume_ml':1}),(2,{'route':'external_path'}),(3,{'confirmed':True})]:
             value=self.native();value['blocks'][0]['steps'][index].update(change);invalid.append(value)
         value=self.native();value['blocks'][0]['steps'].reverse();invalid.append(value)
         for value in invalid:self.assertEqual(self.request('POST','/api/preview',{'sequence':value})[0],422)

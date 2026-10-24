@@ -67,7 +67,7 @@ class InletTopologyTests(unittest.TestCase):
         for route in ('waste_1', 'waste_2'):
             with self.assertRaises(ApiError): self.repo.preview(self.sequence([dict(device='valve', operation='switch_route', route=route)]))
         sequence = self.sequence([dict(device='peristaltic_1', operation='inject', fluid='water', volume_ml=1)])
-        sequence['preflight']['steps'][1]['route'] = 'waste_1'
+        sequence['preflight']['steps'][2]['route'] = 'waste_1'
         with self.assertRaises(ApiError): self.repo.preview(sequence)
 
     def test_migration_removes_obsolete_waste_switches_and_keeps_volumes(self):
@@ -76,7 +76,7 @@ class InletTopologyTests(unittest.TestCase):
         before = [(step['device'], step.get('volume_ml')) for step in old['steps'] if 'volume_ml' in step]
         after = [(step['device'], step.get('volume_ml')) for step in migrated['steps'] if 'volume_ml' in step]
         self.assertEqual(before, after)
-        self.assertEqual(migrated['preflight']['steps'][1]['route'], 'waste')
+        self.assertEqual(migrated['preflight']['steps'][2]['route'], 'waste')
         self.assertFalse(any(step.get('route') in ('waste_1', 'waste_2') for step in migrated['steps']))
         self.repo.preview(migrated)
         self.assertEqual(migrate_sequence(migrated), migrated)

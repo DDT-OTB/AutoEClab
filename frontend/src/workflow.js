@@ -25,7 +25,7 @@ export function validateBlock(block,{allowEmpty=false}={}) {
 export function importBlock(document) {
   if(!fields(document,['schema_version','kind','id','description','steps'],['type']) || document.schema_version!==1 || document.kind!=='function_block') throw new Error('功能块文件需要 schema_version=1、kind=function_block、id、description 和 steps。');
   if(/[\u3400-\u9fff]/.test(JSON.stringify(document))) throw new Error('功能块 JSON 请使用英文。');
-  return structuredClone(validateBlock({id:document.id,description:document.description,steps:document.steps,...(document.type?{type:document.type}:{})}));
+  return structuredClone(validateBlock(upgradePreflightBlock({id:document.id,description:document.description,steps:document.steps,...(document.type?{type:document.type}:{})})));
 }
 
 export function exportBlock(block) {
@@ -36,6 +36,7 @@ export function exportBlock(block) {
 
 function workflowBlocks(sequence) {
   if(!object(sequence) || ![2,3].includes(sequence.schema_version)) throw new Error('实验方案需要 schema_version=2 或 3。');
+  sequence=upgradePreflightSequence(sequence);
   validateMode(sequence);
   let blocks;
   if(sequence.schema_version===2) {
@@ -107,4 +108,4 @@ export function workflowErrors(sequence,safetyPolicy) {
     return [];
   } catch(error) {return [error.message];}
 }
-import {alignPreflight,defaultPreflight,isPreflight,validatePreflight,preflightErrors} from './preflight.js';
+import {alignPreflight,defaultPreflight,isPreflight,validatePreflight,preflightErrors,upgradePreflightBlock,upgradePreflightSequence} from './preflight.js';

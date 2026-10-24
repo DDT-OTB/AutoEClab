@@ -151,8 +151,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       const data = await api.experiment(id);
       const value = workflowToEditor(data.sequence,safetyPolicy);
       setDraft(value); setBase({ id, version: data.version });
-      const migrated=data.sequence.schema_version===2 || (!isDebug(data.sequence) && !hasPreparation(data.sequence));
-      setDirty(migrated);if(migrated)setNotice(isDebug(data.sequence)?'已转换为功能块编排，请检查后保存方案。':'已补入必需的前置准备功能块，请检查流路后保存方案。');
+      const migrated=sequenceKey(toSequence(value))!==sequenceKey(data.sequence);
+      setDirty(migrated);if(migrated)setNotice('已升级流程模板：注射泵回零前先切水并回读，请检查后保存方案。');
       setSelectedBlock(value.blocks[0]?._key || null);setSelected(null); setPlan(null);
       setRightTab('parameters');
       return true;
@@ -176,7 +176,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     setBusy('load-run');setError('');
     try {
       const data=await api.experiment(id);
-      setRunSequence(runSnapshot(data.sequence,safetyPolicy));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || (!isDebug(data.sequence) && !hasPreparation(data.sequence)),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
+      const value=runSnapshot(data.sequence,safetyPolicy);
+      setRunSequence(value);setRunSource({kind:'file',id,version:data.version,migrated:sequenceKey(value)!==sequenceKey(data.sequence),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
     }catch(failure){setError(failure.message);}
     finally{setBusy('');}
   }

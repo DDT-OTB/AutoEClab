@@ -14,7 +14,8 @@
     "channels": 6,
     "routes": {
       "waste_1": 5,
-      "waste_2": 6
+      "waste_2": 6,
+      "water": 5
     },
     "notes": "Synthetic configuration; no physical device or measurement is represented.",
     "serial": {
