@@ -63,6 +63,7 @@ class RuntimeMonitor:
         self.identity, self.offset, self.partial = identity, 0, b""
         self.plan, self.sequence_id, self.current, self.terminal = {}, None, None, None
         self.completed, self.finished, self.faults = set(), set(), set()
+        self.selector_position = None
         self.last_at = None
 
     def _read(self, path):
@@ -100,6 +101,8 @@ class RuntimeMonitor:
                         self.current = None
                 elif kind in ('measurement_started', 'measurement_progress') and self.current:
                     self.current['measurement'] = event
+                elif kind in ('valve_position_verified','valve_already_positioned') and event.get('device')=='valve':
+                    self.selector_position = {'channel':event.get('channel'),'at':event['time']}
                 elif kind in ("serial_error", "stop_failed"):
                     self.faults.add(event.get("device"))
                 elif kind in ("sequence_completed", "sequence_aborted"):
@@ -126,7 +129,7 @@ class RuntimeMonitor:
                 return {**result, "state": "unknown", "reason": "journal_unavailable"}
             result.update(run_id=path.stem, sequence_id=self.sequence_id,
                           step_count=len(self.plan.get("steps", [])), completed_steps=len(self.completed),
-                          last_event_at=self.last_at)
+                          last_event_at=self.last_at, selector_position=self.selector_position)
             if self.terminal:
                 result.update(state="completed" if self.terminal["event"] == "sequence_completed" else "aborted",
                               reason=self.terminal["event"])

@@ -15,7 +15,7 @@ from .runtime import RuntimeMonitor, timestamp
 from .status_refresh import RefreshBusy, StatusRefresh
 from .measurement import compile_workflow, is_measurement, measurement_templates
 from .cell_safety import CellSafetyError, load_policy, require_safe_volumes
-from .workflow import flatten_sequence, block_ranges
+from .workflow import flatten_sequence, block_ranges, sequence_mode, preparation_required
 from .preflight import require_preflight
 
 
@@ -89,7 +89,8 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.14.0",
+            "ok": True, "service": "pump-console", "version": "0.15.0",
+            "debug_workflows_supported": True,
             "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,
             "workflow_schema_versions": [2, 3],
@@ -121,11 +122,14 @@ class LabRepository:
                 if sequence != drain_sequence(self.safety_policy(), sequence['steps'][0].get('route', 'waste')):
                     raise ValueError('Invalid internal startup drain')
                 preflight = None
-            else:
+            elif preparation_required(sequence):
                 preflight = require_preflight(sequence, self.safety_policy())
+            else:
+                preflight = None
             flattened = flatten_sequence(sequence)
             devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
-            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config, self.station, self.topology)
+            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config, self.station, self.topology,
+                                    debug=sequence_mode(sequence) == 'debug')
         except (ValueError, KeyError, TypeError) as error:
             raise ApiError(422, str(error), "validation_error") from error
         try:
@@ -136,6 +140,10 @@ class LabRepository:
             step.get("duration_s") or step.get("estimated_movement_s") or step.get("estimated_measurement_s") or step.get("seconds") or 0
             for step in plan["steps"])
         warnings = []
+        if sequence_mode(sequence) == 'debug' and preflight is None and not _internal_drain:
+            warnings.append('调试流程不自动回零或排空。启动时须现场确认液路与初始池内液量，调试不会生成正式实验的前置证明。')
+        if any(step['action']=='initialize_syringe' for step in plan['steps']):
+            warnings.append('显式回零动作会排出注射器内液体；未知旧液不计入体积预算，须确认接液条件和余量。')
         if any(is_measurement(step) for step in flattened["steps"]):
             warnings.append("CV 电流与电位采用名义换算；时间轴使用服务器接收时间。" if self.station['enabled'] else "测量参数可保存，但电化学工作站尚未接入，测量动作不能执行。")
             if self.station['enabled'] and not self.station['timing_verified']:
@@ -143,7 +151,7 @@ class LabRepository:
             if any(is_measurement(step) and step["parameters"]["reference_electrode"] == "unspecified" for step in flattened["steps"]):
                 warnings.append("部分测量动作尚未注明参比电极，测量记录会保留 unspecified。")
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
-                "preflight": preflight,
+                "preflight": preflight, "sequence_mode": sequence_mode(sequence),
                 "blocks": block_ranges(sequence),
                 "cell_safety": cell_safety, "safety_policy": self.safety_policy(),
                 "hardware_executed": False, "generated_at": utc_now()}
@@ -191,6 +199,7 @@ class LabRepository:
                   "modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
                   "size_bytes": len(raw), "version": hashlib.sha256(raw).hexdigest(),
                   "schema_version": schema if type(schema) is int else None,
+                  "sequence_mode": sequence.get('mode','experiment') if isinstance(sequence,dict) else None,
                   "editable": editable, "file_error": issue,
                   "has_markdown": companion.is_file() and not companion.is_symlink(),
                   "contains_measurement": isinstance(steps, list) and any(is_measurement(step) for step in steps if isinstance(step, dict))}
@@ -368,10 +377,13 @@ class LabRepository:
                     "~~~json\n" + json.dumps(step["parameters"],ensure_ascii=False,indent=2) + "\n~~~\n" +
                     "JSON 使用 V、V/s、A 和 s；圈数为完整循环数。电位以所填参比电极为准。\n")
         groups = block_ranges(sequence)
-        group_text = "\n\n功能块顺序：" + " → ".join(f"{item['id']}（必需前置准备）" if item.get('type') == 'preflight' else f"{item['id']}（动作 {item['first_step']}–{item['last_step']}）" for item in groups) if groups else ""
+        group_text = "\n\n功能块顺序：" + " → ".join(f"{item['id']}（前置准备）" if item.get('type') == 'preflight' else f"{item['id']}（动作 {item['first_step']}–{item['last_step']}）" for item in groups) if groups else ""
+        mode_text = ('\n\n模式：调试编排。' + ('已自行加入前置准备。' if preparation_required(sequence) else
+                     f"无强制前置准备；初始池内液量为人工声明的 {sequence.get('initial_cell_volume_ml',0)} mL。")
+                     if sequence_mode(sequence)=='debug' else '\n\n模式：正式实验，须完成前置准备。')
         block = (
             f"{start}\n## 图形化编辑器配置摘要\n\n"
-            f"方案：{sequence['id']}" + group_text + "\n\n" + "\n".join(rows) + "".join(measurement_blocks) +
+            f"方案：{sequence['id']}" + mode_text + group_text + "\n\n" + "\n".join(rows) + "".join(measurement_blocks) +
             "\n\n此文件由 Pump Console 保存。完成了配置校验和离线预览，未执行硬件动作。\n"
             "液体体积由现有模板换算；计时估算不包含阀动作与通讯时间。\n" + end)
         if existing is None:

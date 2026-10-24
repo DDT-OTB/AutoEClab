@@ -43,7 +43,7 @@ def migrate_steps(steps, default_fluid='electrolyte'):
             if step.get('route') not in SOURCE_CHANNELS:
                 raise ValueError('Unknown valve source route; migration requires review')
             route = step['route']
-        if step.get('device') == 'syringe_c':
+        if step.get('device') == 'syringe_c' and step.get('operation') != 'initialize':
             fluid = step.get('fluid', default_fluid)
             if fluid not in SOURCE_CHANNELS:
                 raise ValueError('Unsupported syringe liquid source')
@@ -88,7 +88,7 @@ def migrate_sequence(sequence):
     return value
 
 
-def compile_inlet_workflow(sequence, devices, templates, compiler, config, station):
+def compile_inlet_workflow(sequence, devices, templates, compiler, config, station, debug=False):
     from .measurement import compile_workflow, is_measurement
     doc, source = deepcopy(devices), deepcopy(templates)
     doc['devices']['valve']['routes'] = dict(SOURCE_CHANNELS)
@@ -105,12 +105,22 @@ def compile_inlet_workflow(sequence, devices, templates, compiler, config, stati
         ids.add(name); step['id'] = name
         local = deepcopy(source)
         direct = False
+        if step.get('device') == 'syringe_c' and step.get('operation') == 'initialize':
+            if not debug or set(step) - {'device','operation','id','description'}:
+                raise ValueError('机械回零动作仅允许在显式调试流程中使用。')
+            from .execution import initialization_plan
+            item = initialization_plan(doc)['steps'][0]
+            item.update(id=name, index=index, description=step.get('description','Explicit syringe homing debug action'))
+            compiled.append(item)
+            continue
         if step.get('device') == 'valve':
             if step.get('route') not in SOURCE_CHANNELS:
                 raise ValueError('六通阀现在用于注射泵入口选液，仅支持 water（5）或 electrolyte（6）；旧废液切阀动作需更新。')
             selected = step['route']
         elif step.get('device') == 'syringe_c':
             fluid = step.get('fluid', local['syringe_c']['action']['fluid'])
+            if debug and selected is None and fluid in SOURCE_CHANNELS:
+                selected = fluid  # Debug may use the current source, but execution must verify its actual channel.
             if fluid not in SOURCE_CHANNELS or selected != fluid:
                 raise ValueError('注射泵吸液前必须显式选择与液体一致的入口：water=5，electrolyte=6。')
             local['syringe_c']['action'].update(fluid=fluid, source=fluid + '_reservoir')

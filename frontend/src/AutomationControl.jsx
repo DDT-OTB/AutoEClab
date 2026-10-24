@@ -7,6 +7,25 @@ import {operationLabels} from './model.js';
 import {PreflightProgress} from './PreflightBlock.jsx';
 import {canAutoAdvance,preflightInfo} from './preflight.js';
 
+export function DebugExecutionConfirmation({prepared,currentSequence,pending,error,onClose,names,onStart,fresh=true}) {
+  const [setup,setSetup]=useState(false),[discharge,setDischarge]=useState(false);
+  const current=preparedIsCurrent(prepared,currentSequence);
+  const steps=prepared.preview.plan.steps,homing=steps.some(step=>step.action==='initialize_syringe');
+  return <div className="modal-backdrop automation-backdrop"><section className="modal automation-confirmation" role="dialog" aria-modal="true" aria-label="确认执行调试流程">
+    <div className="modal-header"><h2><ShieldCheck size={19}/>执行调试流程</h2><button className="icon-button" onClick={onClose} disabled={pending} aria-label="关闭调试执行"><X size={18}/></button></div>
+    <p className="automation-confirmation-intro">按编排顺序执行全部动作，不自动加入回零或排空。运行使用本次固定的方案与设备参数。</p>
+    <div className="automation-plan-heading"><strong>{prepared.sequence.id}</strong><span>{prepared.sequence.blocks?.length ?? 1} 个功能块 · {steps.length} 个调试动作</span></div>
+    {prepared.preview.warnings?.map((warning,index)=><p key={index} className="measurement-warning">{warning}</p>)}
+    <p className="automation-notice">初始池内液量：{prepared.sequence.initial_cell_volume_ml ?? 0} mL；预计峰值：{prepared.preview.cell_safety?.peak_volume_ml ?? '—'} mL。</p>
+    <ol className="automation-confirm-steps">{steps.map((step,index)=><li key={step.id}><span>{index+1}</span><div><strong>{names[step.device] || step.device}</strong><small>{operationLabels[step.operation] || step.action}{step.volume_ml!==undefined?' · '+step.volume_ml+' mL':''}{step.route?' · '+step.route:''}</small></div></li>)}</ol>
+    <label className="preflight-acknowledgement"><input type="checkbox" checked={setup} disabled={pending || !fresh} onChange={event=>setSetup(event.target.checked)}/>已现场确认初始池内液量、液体来源、管路和接液条件与本次调试一致</label>
+    {homing && <label className="preflight-acknowledgement"><input type="checkbox" checked={discharge} disabled={pending || !fresh} onChange={event=>setDischarge(event.target.checked)}/>已确认显式回零会排出注射器旧液，当前接液位置与余量允许机械回零</label>}
+    {!current && <p className="automation-error" role="alert">载入的流程已修改，请关闭并重新校验。</p>}
+    {error && <p className="automation-error" role="alert">{error}</p>}
+    <div className="automation-dialog-actions"><button className="outline-button" onClick={onClose} disabled={pending}>返回</button><button className="primary-button" onClick={()=>onStart(setup,discharge)} disabled={pending || !fresh || !current || !setup || (homing && !discharge)}>{pending?<LoaderCircle size={15} className="refresh-spinning"/>:<Play size={15}/>}启动调试流程</button></div>
+  </section></div>;
+}
+
 export function ExecutionConfirmation({prepared,currentSequence,pending,error,onClose,names,blockedReason,onAdvance,onStop,canStop,fresh=true,automatic=false}) {
   const [discharge,setDischarge]=useState(false),[empty,setEmpty]=useState(false);
   useEffect(()=>{setEmpty(false);},[prepared.run_id,prepared.cell_preparation?.run_id]);
@@ -47,7 +66,7 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
     if(preparedRef.current?.run_id!==value.run_id)return;
     if(completedRuns.current.has(value.run_id))return;
     onProgress?.(value);
-    if(value.workflow?.main_started){completedRuns.current.add(value.run_id);onStarted?.(value.sequence,value.run_id);preparedRef.current=null;setPrepared(null);setAutomatic(false);setNotice(value.workflow.phase==='failed'?'正式实验启动或执行失败，请查看运行反馈。':'已提交正式实验，等待控制器预检与运行反馈。');}
+    if(value.workflow?.main_started){completedRuns.current.add(value.run_id);onStarted?.(value.sequence,value.run_id);preparedRef.current=null;setPrepared(null);setAutomatic(false);setNotice(value.workflow.phase==='failed'?'流程启动或执行失败，请查看运行反馈。':'已提交流程，等待控制器预检与运行反馈。');}
     else setPrepared(previous=>previous?.run_id===value.run_id?{...previous,...value}:value);
   }
   useEffect(()=>{
@@ -74,6 +93,15 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
     try{const result=await api.advanceWorkflow(prepared.run_id,prepared.version,discharge,empty);accept(result);setAutomatic(!result.workflow?.main_started);await onRefresh();}
     catch(failure){setError(failure.message);setAutomatic(false);}finally{pendingRef.current=false;setPending('');}
   }
+  async function startDebug(setup,discharge) {
+    if(pendingRef.current || user?.role!=='admin' || !fresh || !preparedIsCurrent(prepared,currentSequence.current))return;
+    pendingRef.current=true;setPending('debug-start');setError('');
+    try {
+      await api.startDebugExecution(prepared.run_id,prepared.version,setup,discharge);
+      accept(await api.preparation(prepared.run_id));await onRefresh();
+    }catch(failure){setError(failure.message);}
+    finally{pendingRef.current=false;setPending('');}
+  }
   useEffect(()=>{if(!pending && canAutoAdvance(prepared,sequence,fresh,automatic))void advance();},[prepared?.workflow?.phase,prepared?.workflow?.needs_advance,automatic,fresh,pending,sequence]);
   async function stop() {
     if(pendingRef.current || !current?.can_stop || user?.role!=='admin')return;
@@ -97,6 +125,6 @@ export default function AutomationControl({user,sequence,status,health,fresh,err
     {current?.cleanup_failed && <p className="automation-error" role="alert">设备停止回读失败，请现场确认。</p>}
     {notice && <p className="automation-notice" role="status">{notice}</p>}{error && !prepared && <p className="automation-error" role="alert">{error}</p>}
   </section>}
-    {prepared && user?.role==='admin' && <ExecutionConfirmation key={prepared.run_id} prepared={prepared} currentSequence={sequence} pending={!!pending} error={error} onAdvance={advance} onClose={()=>{preparedRef.current=null;setPrepared(null);setAutomatic(false);setError('');}} names={names} onStop={stop} canStop={current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} fresh={fresh} automatic={automatic}/>}
+    {prepared && user?.role==='admin' && (prepared.operation==='debug_sequence'?<DebugExecutionConfirmation key={prepared.run_id} prepared={prepared} currentSequence={sequence} pending={!!pending} error={error} onStart={startDebug} onClose={()=>{preparedRef.current=null;setPrepared(null);setError('');}} names={names} fresh={fresh}/>:<ExecutionConfirmation key={prepared.run_id} prepared={prepared} currentSequence={sequence} pending={!!pending} error={error} onAdvance={advance} onClose={()=>{preparedRef.current=null;setPrepared(null);setAutomatic(false);setError('');}} names={names} onStop={stop} canStop={current?.target_run_id===prepared.run_id && current?.can_stop && !current?.stop_requested} fresh={fresh} automatic={automatic}/>)}
   </>;
 }

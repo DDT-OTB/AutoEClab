@@ -1,4 +1,14 @@
 /* One grid owns panel height; content scrolls within each panel. */
+.workflow-mode-bar {display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#f8faf5}
+.workflow-mode-switch {display:flex;gap:3px;padding:3px;background:#eaf0e3;border-radius:6px}
+.workflow-mode-switch button {padding:7px 12px;font-size:12px;border-radius:4px;color:#708466}
+.workflow-mode-switch button[aria-pressed=true] {background:white;color:#375e2c;box-shadow:0 1px 3px #283b1a14}
+.workflow-mode-bar p {flex:1;min-width:190px;font-size:11px;line-height:1.7;color:#819373;margin:0}
+.workflow-mode-bar.is-debug {background:#fbf9f0}
+.debug-initial-volume {display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:11px;color:#7d7354}
+.debug-initial-volume input {width:78px;padding:6px;border:1px solid #d8d9c8;border-radius:4px;background:white}
+.debug-initial-volume small {font-size:10px}
+.run-debug-mode {margin:12px 0;font-size:12px;line-height:1.7;color:#80704d;background:#fbf8ed;padding:10px 14px;border-radius:6px}
 .experiment-section .builder-grid {
   --workbench-height: 680px;
   grid-template-columns: 184px minmax(230px,.9fr) minmax(350px,1.1fr);

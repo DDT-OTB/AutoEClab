@@ -25,7 +25,7 @@ class WorkflowApiTests(unittest.TestCase):
     def test_library_is_authenticated_and_contains_only_english_parameterized_blocks(self):
         code, result = self.request('GET', '/api/function-blocks')
         self.assertEqual(code, 200)
-        self.assertEqual(len(result['blocks']), 4)
+        self.assertEqual(result['blocks'], [])
         for value in result['blocks']:
             block = import_block(value)
             self.assertTrue(block['steps'])
@@ -66,7 +66,7 @@ class WorkflowApiTests(unittest.TestCase):
         sequence = self.workflow()
         first = {'id': 'water', 'description': 'Water', 'steps': [{'device': 'peristaltic_1', 'operation': 'inject', 'volume_ml': 25, 'fluid': 'water'}]}
         second = {'id': 'acid', 'description': 'Acid', 'steps': [{'device': 'peristaltic_3', 'operation': 'inject', 'volume_ml': 16, 'fluid': 'sulfuric_acid'}]}
-        drain = import_block(next(item for item in function_block_templates() if item['id']=='drain_waste_1'))
+        drain = import_block(json.loads((ROOT/'tests/fixtures/legacy_function_blocks/drain_waste_1.json').read_text()))
         sequence['blocks'] = [default_preflight(),first, second, drain]
         self.repo.execution.enabled = True
         for route in ('/api/preview', '/api/experiments', '/api/execution/prepare'):

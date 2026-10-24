@@ -82,9 +82,12 @@ class InletTopologyTests(unittest.TestCase):
         self.assertEqual(migrate_sequence(migrated), migrated)
 
     def test_builtin_blocks_use_direct_drain_and_explicit_inlet_selection(self):
+        self.assertEqual(self.repo.block_library.list()['blocks'],[])
+        custom=json.loads((ROOT/'tests/fixtures/legacy_function_blocks/electrolyte_injection.json').read_text());custom['id']='custom_electrolyte'
+        self.repo.block_library.save(custom)
         blocks = self.repo.block_library.list()['blocks']
         self.assertFalse(any(step.get('route') in ('waste_1', 'waste_2') for block in blocks for step in block['steps']))
-        syringe = next(block for block in blocks if block['id'] == 'electrolyte_injection')
+        syringe = next(block for block in blocks if block['id'] == 'custom_electrolyte')
         self.assertEqual(syringe['steps'][0]['route'], 'electrolyte')
 
     def test_mismatched_runtime_source_readback_never_aspirates(self):

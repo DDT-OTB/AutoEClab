@@ -1,4 +1,5 @@
 export const MAX_BLOCKS=128;
+import {isDebug,modeFields,validateMode} from './workflowMode.js';
 export const MAX_ACTIONS=1024;
 const identifier=/^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
 let nextKey=1;
@@ -35,12 +36,13 @@ export function exportBlock(block) {
 
 function workflowBlocks(sequence) {
   if(!object(sequence) || ![2,3].includes(sequence.schema_version)) throw new Error('实验方案需要 schema_version=2 或 3。');
+  validateMode(sequence);
   let blocks;
   if(sequence.schema_version===2) {
-    if(!fields(sequence,['schema_version','id','description','steps'],['notes','preflight']) || !Array.isArray(sequence.steps) || sequence.steps.some(step=>!object(step))) throw new Error('旧版实验方案需要 steps 动作数组，不能同时包含顶层 blocks。');
+    if(!fields(sequence,['schema_version','id','description','steps'],['notes','preflight','mode','initial_cell_volume_ml']) || !Array.isArray(sequence.steps) || sequence.steps.some(step=>!object(step))) throw new Error('旧版实验方案需要 steps 动作数组，不能同时包含顶层 blocks。');
     blocks=[...(sequence.preflight?[validateBlock(sequence.preflight)]:[]),...(sequence.steps.length?[{id:'imported_actions',description:'Imported action sequence',steps:sequence.steps}]:[])];
   } else {
-    if(!fields(sequence,['schema_version','id','description','blocks'],['notes']) || !Array.isArray(sequence.blocks)) throw new Error('新版实验方案需要 blocks 功能块数组，不能同时包含顶层 steps。');
+    if(!fields(sequence,['schema_version','id','description','blocks'],['notes','mode','initial_cell_volume_ml']) || !Array.isArray(sequence.blocks)) throw new Error('新版实验方案需要 blocks 功能块数组，不能同时包含顶层 steps。');
     const ids=new Set();
     sequence.blocks.forEach(block=>{
       validateBlock(block,{allowEmpty:true});
@@ -56,21 +58,21 @@ function workflowBlocks(sequence) {
 
 export function workflowToEditor(sequence,safetyPolicy) {
   let blocks=workflowBlocks(sequence);
-  if(!blocks.some(isPreflight)) {const block=defaultPreflight();block.id=uniqueBlockId(block.id,blocks);blocks=[block,...blocks];}
+  if(!isDebug(sequence) && !blocks.some(isPreflight)) {const block=defaultPreflight();block.id=uniqueBlockId(block.id,blocks);blocks=[block,...blocks];}
   if(blocks.length>MAX_BLOCKS)throw new Error('包含前置准备后，功能块总数超过 128。');
   if(safetyPolicy)blocks=alignPreflight({blocks},safetyPolicy).blocks;
-  const required=preflightErrors({schema_version:3,blocks},safetyPolicy);if(required.length)throw new Error(required[0]);
-  return {schema_version:3,id:sequence.id,description:sequence.description,notes:sequence.notes || ['Review this experiment before hardware execution.'],
+  const required=preflightErrors({...modeFields(sequence),schema_version:3,blocks},safetyPolicy);if(required.length)throw new Error(required[0]);
+  return {schema_version:3,id:sequence.id,description:sequence.description,...modeFields(sequence),notes:sequence.notes || ['Review this experiment before hardware execution.'],
     blocks:blocks.map(block=>({...structuredClone(block),_key:uiKey(),steps:block.steps.map(step=>({...structuredClone(step),_key:uiKey()}))}))};
 }
 
 export function workflowSequence(draft) {
-  return {schema_version:3,id:draft.id,description:draft.description,notes:structuredClone(draft.notes || []),
+  return {schema_version:3,id:draft.id,description:draft.description,...modeFields(draft),notes:structuredClone(draft.notes || []),
     blocks:draft.blocks.map(block=>({id:block.id,description:block.description,...(block.type?{type:block.type}:{}),steps:block.steps.map(({_key,...step})=>structuredClone(step))}))};
 }
 
 export function flattenSequence(sequence) {
-  if(sequence.schema_version!==3 && !sequence.blocks) {const {preflight,...flat}=sequence;return flat;}
+  if(sequence.schema_version!==3 && !sequence.blocks) {const {preflight,mode,initial_cell_volume_ml,...flat}=sequence;return flat;}
   return {schema_version:2,id:sequence.id,description:sequence.description,notes:sequence.notes || [],
     steps:sequence.blocks.flatMap((block,bi)=>isPreflight(block)?[]:block.steps.map((step,si)=>({...step,id:`block_${String(bi+1).padStart(3,'0')}_step_${String(si+1).padStart(3,'0')}`})))};
 }
@@ -86,11 +88,21 @@ export function instantiateBlock(block,blocks) {
     steps:block.steps.map(step=>({...structuredClone(step),_key:uiKey()}))};
 }
 
+export function setWorkflowMode(draft,mode,safetyPolicy) {
+  const value=workflowSequence(draft);
+  value.mode=mode;
+  if(mode==='debug') {
+    value.blocks=value.blocks.filter(block=>!isPreflight(block));
+    value.initial_cell_volume_ml=0;
+  } else delete value.initial_cell_volume_ml;
+  return workflowToEditor(value,safetyPolicy);
+}
+
 export function workflowErrors(sequence,safetyPolicy) {
   try {
     workflowBlocks(sequence);
     const required=preflightErrors(sequence,safetyPolicy);if(required.length)return required;
-    if(!sequence.blocks.some(block=>!isPreflight(block))) return ['请在前置准备之后添加至少一个实验功能块。'];
+    if(!sequence.blocks.some(block=>!isPreflight(block))) return ['请添加至少一个包含动作的功能块。'];
     sequence.blocks.forEach(block=>validateBlock(block));
     return [];
   } catch(error) {return [error.message];}

@@ -8,7 +8,7 @@ from .measurement_store import MeasurementStore
 
 
 def run_mixed(devices, plan, event, controller, station, data_root, run_id, actor,
-              station_factory=EC110Session):
+              station_factory=EC110Session, execution_mode='sequence'):
     device_module = importlib.import_module('lab_automation.devices')
     pump_plan = {**plan, 'steps': [step for step in plan['steps'] if step['action'] != 'measurement']}
     runner = controller.Runner(devices, pump_plan, event)
@@ -22,6 +22,7 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
             print('Cleanup event could not be recorded: ' + str(exc), file=sys.stderr)
     try:
         used = list(dict.fromkeys(step['device'] for step in pump_plan['steps']))
+        used.extend(step['requires_source']['device'] for step in pump_plan['steps'] if step.get('requires_source') and step['requires_source']['device'] not in used)
         resolved = [os.path.realpath(devices[name]['port']) for name in used]
         if measuring:
             resolved.append(os.path.realpath(station['port']))
@@ -36,6 +37,10 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
         # Every participating pump and the workstation must pass before movement.
         for name, device in runner.devices.items():
             if isinstance(device, device_module.Syringe):
+                first = next(step for step in pump_plan['steps'] if step['device']==name)
+                if execution_mode=='debug_sequence' and first['action']=='initialize_syringe':
+                    event('preflight_deferred_for_explicit_homing',device=name)
+                    continue
                 device.preflight([step for step in pump_plan['steps']
                                   if step['device'] == name and step['action'] == 'syringe_transfer'])
             else:
@@ -47,7 +52,8 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
         for step in plan['steps']:
             event('step_started', step=step)
             if step['action'] == 'measurement':
-                writer = store.create(run_id, plan['sequence_id'], step, actor, step['hardware_parameters'])
+                writer = store.create(run_id, plan['sequence_id'], step, actor, step['hardware_parameters'],
+                                      provenance={'execution_mode':execution_mode})
                 session.measure(step, writer)
             else:
                 device = runner.devices[step['device']]
@@ -69,7 +75,12 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
                         valve = runner.devices[source['device']]
                         if not valve.normal() or valve.channel() != source['channel']:
                             raise ValueError('注射泵吸液前回读的入口通道与液体不匹配，未开始吸液。')
+                        event('valve_position_verified',device=source['device'],channel=source['channel'],source='syringe_inlet_precheck')
                     device.transfer(step)
+                elif action == 'initialize_syringe' and execution_mode=='debug_sequence':
+                    from .syringe_initialization import initialize
+                    initialize(devices,{**plan,'steps':[step]},event,existing_pump=device,manage_sequence=False)
+                    device.preflight([value for value in pump_plan['steps'] if value['device']==step['device'] and value['action']=='syringe_transfer'])
                 elif action == 'wait':
                     runner.sleep(step['seconds'])
                 else:

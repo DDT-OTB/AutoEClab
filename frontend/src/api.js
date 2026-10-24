@@ -80,6 +80,7 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     drainCell: (run_id, version, route, confirm_discharge, request_id) => request('/api/execution/drain', {method:'POST',body:JSON.stringify({run_id,version,route,confirm_discharge,request_id})}),
     confirmEmpty: (run_id, version, empty_confirmed) => request('/api/execution/confirm-empty', {method:'POST',body:JSON.stringify({run_id,version,empty_confirmed})}),
     startExecution: (run_id, version) => request('/api/execution/start', { method: 'POST', body: JSON.stringify({run_id, version}) }),
+    startDebugExecution: (run_id,version,confirm_setup,confirm_homing_discharge=false) => request('/api/execution/debug-start', {method:'POST',body:JSON.stringify({run_id,version,confirm_setup,confirm_homing_discharge})}),
     stopExecution: run_id => request('/api/execution/stop', { method: 'POST', body: JSON.stringify({run_id}) }),
     preview: sequence => request('/api/preview', { method: 'POST', body: JSON.stringify({ sequence }) }),
     save: (sequence, version) => request('/api/experiments', {

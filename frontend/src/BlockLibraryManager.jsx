@@ -61,8 +61,8 @@ export default function BlockLibraryManager({user,seed,initialId,templates,names
     setBase({id:sameName.id,version:sameName.version});setNotice('保存时将更新同名模板；已有实验中的副本保持原样。');
   }
   function addAction() {
-    if(!templates[device] || locked || isPreflight(draft))return;
-    const step=makeStep(templates[device],defaultVolume);edit(current=>({...current,steps:[...current.steps,step]}));setSelected(step._key);
+    if((!templates[device] && device!=='syringe_homing') || locked || isPreflight(draft))return;
+    const step=device==='syringe_homing'?{device:'syringe_c',operation:'initialize',_key:uiKey()}:makeStep(templates[device],defaultVolume);edit(current=>({...current,steps:[...current.steps,step]}));setSelected(step._key);
   }
   function updateAction(values){edit(current=>({...current,steps:current.steps.map(step=>step._key===selected?{...step,...values}:step)}));}
   function copyAction(key){
@@ -109,7 +109,7 @@ export default function BlockLibraryManager({user,seed,initialId,templates,names
           {action?<><button type="button" className="block-back" onClick={()=>setSelected(null)}><ArrowLeft size={14}/>返回模板动作列表</button><ActionInspector step={action} template={templates[action.device]} index={draft.steps.findIndex(step=>step._key===selected)} title={names[action.device] || action.device} onChange={updateAction}/></>:<div className="library-template-fields">
             <label className="parameter-field"><span>模板 ID · 英文，模板库内唯一</span><input value={draft.id} maxLength={80} aria-label="模板 ID" onChange={event=>edit({id:event.target.value})} spellCheck={false}/></label>
             <label className="parameter-field"><span>模板说明 · 英文</span><input value={draft.description} aria-label="模板说明" onChange={event=>edit({description:event.target.value})}/></label>
-            {isPreflight(draft)?<PreflightEditor safetyPolicy={safetyPolicy} block={draft} onChange={edit}/>:<><div className="library-add-action"><select value={device} onChange={event=>setDevice(event.target.value)} aria-label="模板动作设备">{Object.keys(templates).map(id=><option key={id} value={id}>{shortNames[id] || id}</option>)}</select><button type="button" onClick={addAction} disabled={!templates[device]}><Plus size={14}/>添加动作</button></div>
+            {isPreflight(draft)?<PreflightEditor safetyPolicy={safetyPolicy} block={draft} onChange={edit}/>:<><div className="library-add-action"><select value={device} onChange={event=>setDevice(event.target.value)} aria-label="模板动作设备">{Object.keys(templates).map(id=><option key={id} value={id}>{shortNames[id] || id}</option>)}{templates.syringe_c && <option value="syringe_homing">注射泵回零（调试）</option>}</select><button type="button" onClick={addAction} disabled={!templates[device] && device!=='syringe_homing'}><Plus size={14}/>添加动作</button></div>
             <div className="block-action-list library-action-list">{draft.steps.map((step,index)=><FlowStep key={step._key} step={step} template={templates[step.device]} title={shortNames[step.device] || step.device} index={index} total={draft.steps.length} onSelect={()=>setSelected(step._key)} onMove={(from,to)=>edit(current=>({...current,steps:moveStep(current.steps,from,to)}))} onCopy={()=>copyAction(step._key)} onDelete={()=>deleteAction(step._key)}/>)}</div>
             {!draft.steps.length && <p className="block-empty-note">添加动作并设置参数，再保存为可复用模板。</p>}</>}
           </div>}

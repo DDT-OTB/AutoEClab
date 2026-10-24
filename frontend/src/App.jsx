@@ -15,8 +15,9 @@ import BlockLibraryManager from './BlockLibraryManager.jsx';
 import WorkspaceNav,{PlanWorkspaceTabs} from './WorkspaceNav.jsx';
 import RunWorkspace from './RunWorkspace.jsx';
 import {emptyRunSequence,runSnapshot,workspacePage,workspacePages} from './workspace.js';
-import {alignPreflight,isPreflight} from './preflight.js';
-import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
+import {alignPreflight,defaultPreflight,isPreflight} from './preflight.js';
+import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock,setWorkflowMode} from './workflow.js';
+import {isDebug,hasPreparation} from './workflowMode.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
@@ -87,6 +88,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const editorSnapshot = useRef({draft,base,dirty});
   editorSnapshot.current={draft,base,dirty};
   const sequence = useMemo(() => toSequence(draft), [draft]);
+  const debug=isDebug(draft);
   const executionSequence=runSequence || emptyRunSequence;
   const flatRun=useMemo(()=>flattenSequence(executionSequence),[executionSequence]);
   const runErrors=useMemo(()=>runSequence?draftErrors(runSequence,actionTemplates,safetyPolicy):['请先加载或导入一个实验流程。'],[runSequence,actionTemplates,safetyPolicy]);
@@ -149,8 +151,8 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       const data = await api.experiment(id);
       const value = workflowToEditor(data.sequence,safetyPolicy);
       setDraft(value); setBase({ id, version: data.version });
-      const migrated=data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight);
-      setDirty(migrated);if(migrated)setNotice('已补入必需的前置准备功能块，请检查流路后保存方案。');
+      const migrated=data.sequence.schema_version===2 || (!isDebug(data.sequence) && !hasPreparation(data.sequence));
+      setDirty(migrated);if(migrated)setNotice(isDebug(data.sequence)?'已转换为功能块编排，请检查后保存方案。':'已补入必需的前置准备功能块，请检查流路后保存方案。');
       setSelectedBlock(value.blocks[0]?._key || null);setSelected(null); setPlan(null);
       setRightTab('parameters');
       return true;
@@ -174,7 +176,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     setBusy('load-run');setError('');
     try {
       const data=await api.experiment(id);
-      setRunSequence(runSnapshot(data.sequence,safetyPolicy));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
+      setRunSequence(runSnapshot(data.sequence,safetyPolicy));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || (!isDebug(data.sequence) && !hasPreparation(data.sequence)),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
     }catch(failure){setError(failure.message);}
     finally{setBusy('');}
   }
@@ -244,6 +246,17 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   function updateBlock(values) {
     change(current=>({...current,blocks:current.blocks.map(block=>block._key===selectedBlock?{...block,...values}:block)}));
   }
+  function addHoming() {
+    if(!debug || !activeBlock || isPreflight(activeBlock))return;
+    const step={device:'syringe_c',operation:'initialize',_key:uiKey()};
+    updateBlock({steps:[...activeBlock.steps,step]});selectAction(step._key);
+  }
+  function switchMode(mode) {
+    if((draft.mode || 'experiment')===mode)return;
+    const value=setWorkflowMode(draft,mode,safetyPolicy);
+    change(value);setSelectedBlock(value.blocks[0]?._key || null);setSelected(null);
+    setNotice(mode==='debug'?'已切换调试编排，前置准备为可选；请填写现场初始池内液量。':'已切换实验编排，前置准备为必需。');
+  }
   function addBlock(template) {
     const source=template.kind?importBlock(template):template;
     if(isPreflight(source)) {
@@ -277,13 +290,13 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   }
   function copyBlock(key) {const source=draft.blocks.find(block=>block._key===key);if(isPreflight(source))return;const copy=instantiateBlock(source,draft.blocks);change(current=>({...current,blocks:current.blocks.flatMap(block=>block._key===key?[block,copy]:[block])}));selectBlock(copy._key);}
   function deleteBlock(key) {
-    if(isPreflight(draft.blocks.find(block=>block._key===key)))return;
+    if(!debug && isPreflight(draft.blocks.find(block=>block._key===key)))return;
     const index=draft.blocks.findIndex(block=>block._key===key),remaining=draft.blocks.filter(block=>block._key!==key);
     if(!window.confirm('删除此功能块及其内部的所有动作？')) return;
     change({blocks:remaining});
     if(selectedBlock===key) {setSelectedBlock(remaining[Math.min(index,remaining.length-1)]?._key || null);setSelected(null);}
   }
-  function reorderBlocks(from,to) {if(from<=0 || to<=0)return;change(current=>({...current,blocks:moveStep(current.blocks,from,to)}));}
+  function reorderBlocks(from,to) {if(isPreflight(draft.blocks[from]) || isPreflight(draft.blocks[to]))return;change(current=>({...current,blocks:moveStep(current.blocks,from,to)}));}
   function selectAction(key) {
     setSelected(key); setRightTab('parameters');
   }
@@ -391,7 +404,12 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
           <div id="plan-workspace-panel" role="tabpanel" aria-label={planView==='files'?'方案文件管理':'实验流程编辑'}>
           {planView==='files'?<ExperimentManager embedded items={catalog} user={user} activeId={base.id} dirty={dirty} appBusy={busy} onReload={reloadCatalog} onOpen={openManagedExperiment} onUse={loadRunExperiment} onNew={createNew} onImport={()=>{setImportText('');setModal('import');}} onBack={()=>setPlanView('editor')} onChanged={fileChanged}/>:
         <section className="experiment-section">
-          <div className="section-heading editor-heading"><div><span className="eyebrow">EXPERIMENT BUILDER</span><h2>编排实验流程 <span className="count">{draft.blocks.length} 块 · {steps.length} 动作</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setPlanView('files')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
+          <div className="section-heading editor-heading"><div><span className="eyebrow">{debug?'DEBUG':'EXPERIMENT'} BUILDER</span><h2>编排{debug?'调试':'实验'}流程 <span className="count">{draft.blocks.length} 块 · {steps.length} 动作</span></h2></div><div className="builder-actions"><button className="outline-button" onClick={()=>setPlanView('files')}><FolderOpen size={15}/>管理方案</button><button className="subtle-button" onClick={() => { setImportText(''); setModal('import'); }}><ArrowDown size={15} />导入 JSON</button><button className="outline-button" onClick={createNew}><Plus size={15} />新建方案</button></div></div>
+          <div className={'workflow-mode-bar'+(debug?' is-debug':'')}>
+            <div className="workflow-mode-switch" role="group" aria-label="流程模式"><button aria-pressed={!debug} onClick={()=>switchMode('experiment')}>实验编排</button><button aria-pressed={debug} onClick={()=>switchMode('debug')}>调试编排</button></div>
+            <p>{debug?'支持多个功能块与动作，前置准备为可选；运行前确认现场条件。':'每次实验必须完成前置准备，再执行后续动作。'}</p>
+            {debug && !hasPreparation(draft) && <label className="debug-initial-volume"><span>初始池内液量</span><input type="number" min="0" max={safetyPolicy.cell.capacity_ml} step="any" value={draft.initial_cell_volume_ml ?? 0} aria-label="调试初始池内液量" onChange={event=>change({initial_cell_volume_ml:event.target.value===''?'':Number(event.target.value)})}/><small>mL · 现场填写</small></label>}
+          </div>
           <div className="experiment-form">
             <label className="scheme-select"><span>加载已有方案</span><div className="select-wrap"><select value={base.id || ''} onChange={event => loadExperiment(event.target.value)} aria-label="加载已有方案"><option value="" disabled>选择实验方案</option>{catalog.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select><ChevronDown size={15} /></div></label>
             <label><span>方案 ID <em>英文文件名</em></span><input value={draft.id} onChange={event => change({ id: event.target.value })} aria-label="方案 ID" spellCheck={false} /></label>
@@ -399,10 +417,12 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
           </div>
           <div className="builder-grid">
             <BlockPalette elementRef={paletteRef} blocks={blockTemplates} templates={templates} measurementTemplates={measurementTemplates} activeBlock={activeBlock} shortNames={shortNames}
+              debug={debug} hasPreflight={hasPreparation(draft)} onAddPreparation={()=>addBlock(alignPreflight({preflight:defaultPreflight()},safetyPolicy).preflight)} onAddHoming={addHoming}
               canManage={user?.role==='admin'} onManage={()=>openBlockLibrary()} onEditTemplate={id=>openBlockLibrary(null,id)}
               mode={paletteMode} onMode={setPaletteMode} onAddBlock={addBlock} onAddAction={addStep} onNew={newBlock}
               onImport={()=>{setImportText('');setModal('import-block');}}/>
             <BlockCanvas blocks={draft.blocks} selected={selectedBlock} runningIndex={-1} templates={actionTemplates} shortNames={shortNames}
+              debug={debug}
               onSelect={selectBlock} onMove={reorderBlocks} onCopy={copyBlock} onDelete={deleteBlock} onNew={newBlock}/>
             <aside className="inspector" ref={inspectorRef}>
               <div className="inspector-tabs" role="tablist" aria-label="流程编辑侧栏">
@@ -412,16 +432,17 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
               </div>
               <div className="inspector-scroll" ref={inspectorBodyRef} id={rightTab+'-panel'} role="tabpanel" aria-labelledby={rightTab+'-tab'}>
                 {rightTab==='parameters' ? <BlockInspector block={activeBlock} blockIndex={blockIndex} selectedStep={selectedStep} templates={actionTemplates} names={names} shortNames={shortNames}
+                  debug={debug}
                   canManage={user?.role==='admin'} onSaveTemplate={()=>openBlockLibrary(activeBlock)}
                   onBlockChange={updateBlock} onSelectAction={selectAction} onUpdateAction={values=>updateStep(selectedStep._key,values)} onMoveAction={reorder} onCopyAction={copyAction} onDeleteAction={deleteAction}
                   onAddAction={showActions} onExport={downloadBlock}
                   safetyPolicy={safetyPolicy} cellBudget={cellBudget} offset={blockOffset} runningIndex={-1}/> :
                  rightTab==='json' ? <div className="json-panel"><div className="json-caption"><span>schema_version: 3</span><button onClick={async () => { try { await navigator.clipboard.writeText(jsonText); setNotice('JSON 已复制。'); } catch { setError('复制失败，请使用下载 JSON。'); } }} aria-label="复制 JSON"><Clipboard size={14} /></button></div><pre>{jsonText}</pre></div> : <div className="workflow-summary">
-                  <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前实验方案</h3><p>{draft.blocks.length} 个功能块 · {steps.length} 个动作{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
+                  <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前{debug?'调试':'实验'}方案</h3><p>{draft.blocks.length} 个功能块 · {steps.length} 个动作{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
                   <div className="summary-metrics"><div><span>目标注入</span><strong>{totals.inject.toLocaleString()}<small>mL</small></strong></div><div><span>标称抽出</span><strong>{totals.withdraw.toLocaleString()}<small>mL</small></strong></div></div>
                   <div className="estimate-row"><History size={17} /><div><span>计时动作合计</span><strong>{formatDuration(plan?.estimated_timed_seconds)}</strong></div></div><p className="estimate-note">含已设置测量的理论时长；不含切阀、通讯与额外等待。</p>
                   <div className={'validation-state '+(errors.length ? 'needs-review' : 'is-ready')}><span>{errors.length ? <CircleHelp size={17} /> : <Check size={17} />}</span><div><strong>{errors.length ? '还需检查' : plan ? '后端参数预演通过' : '本地参数检查通过'}</strong><p>{errors[0] || (plan ? '配置已校验，未执行设备动作。' : '点击“校验与预演”检查后端模板。')}</p></div></div>
-                  {measurementCount > 0 && <div className="measurement-summary-note"><LockKeyhole size={16} /><div><strong>{health?.measurement_execution_enabled?'CV 已接入执行流程':'测量动作尚不能执行'}</strong><p>{health?.measurement_execution_enabled?'前置准备通过后按顺序测量；曲线显示在实验运行页，数据自动归档。':'CV 参数会随方案保存。电化学工作站未接入，不会跳过测量去运行其余动作。'}</p></div></div>}
+                  {measurementCount > 0 && <div className="measurement-summary-note"><LockKeyhole size={16} /><div><strong>{health?.measurement_execution_enabled?'CV 已接入执行流程':'测量动作尚不能执行'}</strong><p>{health?.measurement_execution_enabled?(debug?'确认后按编排顺序测量；曲线显示在工作站详情，数据自动归档。':'前置准备通过后按顺序测量；曲线显示在工作站详情，数据自动归档。'):'CV 参数会随方案保存。电化学工作站未接入，不会跳过测量去运行其余动作。'}</p></div></div>}
                   {plan?.warnings?.map((message,index) => <p className="summary-warning" key={index}>{message}</p>)}
                 </div>}
               </div>

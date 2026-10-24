@@ -89,7 +89,7 @@ def validate_measurement(step):
     return validate_cv(step.get("parameters"))
 
 
-def compile_workflow(sequence, devices, templates, compiler, config, station=None, topology=None):
+def compile_workflow(sequence, devices, templates, compiler, config, station=None, topology=None, debug=False):
     sequence = flatten_sequence(sequence)
     config.keys(sequence, {"schema_version","id","description","steps","notes"},
                 {"schema_version","id","description","steps"}, "总流程")
@@ -98,7 +98,10 @@ def compile_workflow(sequence, devices, templates, compiler, config, station=Non
         raise ValueError("流程描述须为文字，steps 至少包含一个动作。")
     from .topology import topology_mode, INLET, compile_inlet_workflow
     if topology_mode(topology) == INLET:
-        return compile_inlet_workflow(sequence, devices, templates, compiler, config, station)
+        return compile_inlet_workflow(sequence, devices, templates, compiler, config, station, debug=debug)
+    from .debugging import is_homing, compile_legacy_debug
+    if debug and any(is_homing(step) for step in steps):
+        return compile_legacy_debug(sequence, devices, templates, compiler, config, station)
     if not any(is_measurement(step) for step in steps):
         return config.compile_plan(devices,compiler.expand_sequence(sequence,templates))
     pump_steps, measurement_steps, ids = [], {}, set()

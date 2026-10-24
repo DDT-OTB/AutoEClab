@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {createApi} from './api.js';
 import {templateDraft,templateDocument,newTemplateDraft,librarySaveError} from './blockLibrary.js';
 
-const document=JSON.parse(fs.readFileSync(new URL('../../config/function_blocks/water_rinse.json',import.meta.url)));
+const document=JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/legacy_function_blocks/water_rinse.json',import.meta.url)));
 const entry={id:document.id,block:document,version:'synthetic-version',source:'builtin'};
 
 test('saving an experiment block as a reusable template snapshots parameters and removes UI state',()=>{

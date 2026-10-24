@@ -100,7 +100,7 @@ class BlockLibrary:
             context = [{'device': name, 'operation': 'switch_route', 'route': next(iter(templates[name]['device']['routes']))}
                        for name in sorted(valves)]
             if inlet:
-                syringe = next((step for step in block['steps'] if step['device'] == 'syringe_c'), None)
+                syringe = next((step for step in block['steps'] if step['device'] == 'syringe_c' and step['operation']!='initialize'), None)
                 if syringe:
                     context = [{'device': 'valve', 'operation': 'switch_route',
                                 'route': syringe.get('fluid', templates['syringe_c']['action']['fluid'])}]
@@ -109,7 +109,7 @@ class BlockLibrary:
             compile_workflow({'schema_version': 3, 'id': 'block_template_validation',
                               'description': 'Validate reusable block actions without execution', 'blocks': blocks},
                              devices, templates, self.repository.compiler, self.repository.config,
-                             self.repository.station, self.repository.topology)
+                             self.repository.station, self.repository.topology,debug=True)
         except (ValueError, KeyError, TypeError, StopIteration) as error:
             raise ApiError(422, str(error), 'invalid_block_template') from error
         return deepcopy(document)

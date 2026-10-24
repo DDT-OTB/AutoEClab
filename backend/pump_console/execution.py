@@ -16,6 +16,7 @@ from .repository import ApiError, parse_json
 from .runtime import active_controller, timestamp
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
 from .preflight import require_preflight
+from .workflow import sequence_mode, preparation_required
 
 ACTIVE_STATES = {"starting", "running", "stopping"}
 TERMINAL_STATES = {"completed", "stopped", "failed"}
@@ -122,14 +123,16 @@ class ExecutionManager:
             raise ApiError(422, '电化学工作站尚未接入；包含测量的方案不能启动，也不会跳过测量执行。', 'instrument_not_integrated')
         if plan['unresolved'] or not plan.get('ready_for_hardware'):
             raise ApiError(422, '方案仍有未解决的配置：' + '; '.join(plan['unresolved']), 'configuration_incomplete')
-        return self._store_preparation(sequence, devices, templates, preview, actor)
+        operation = 'debug_sequence' if sequence_mode(sequence) == 'debug' and not preparation_required(sequence) else 'sequence'
+        return self._store_preparation(sequence, devices, templates, preview, actor, operation=operation)
 
     def _store_preparation(self, sequence, devices, templates, preview, actor, operation='sequence', target_run_id=None):
         plan = preview['plan']
         now = datetime.now(timezone.utc)
         run_id = now.strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(6)
         snapshot = {'schema_version': 1, 'sequence': sequence, 'devices': devices, 'templates': templates, 'plan': plan,
-                    'operation': operation, 'target_run_id': target_run_id, 'safety_policy': self.repository.safety_policy()}
+                    'operation': operation, 'target_run_id': target_run_id, 'safety_policy': self.repository.safety_policy(),
+                    'warnings': preview.get('warnings',[])}
         from .topology import INLET
         if self.repository.topology == INLET:
             snapshot['fluidic_topology'] = INLET
@@ -143,6 +146,7 @@ class ExecutionManager:
             self.directory.chmod(0o700)
             write_private(folder / 'snapshot.json', snapshot)
             job = {'run_id': run_id, 'sequence_id': sequence['id'], 'version': fingerprint,
+                   'sequence_mode': sequence_mode(sequence),
                    'operation': operation, 'target_run_id': target_run_id,
                    'discharge_confirmed': operation in ('calibrate_syringe', 'drain_cell'),
                    'preflight_run_ids': [], 'cell_drain_run_id': None, 'cell_waste_route': None,
@@ -199,6 +203,17 @@ class ExecutionManager:
             folder, job = self._job(run_id)
             calibration, cell = self._calibration_state(folder, job), self._cell_state(folder, job)
             result = {'run_id': run_id, 'calibration': calibration, 'cell_preparation': cell}
+            if job.get('operation') == 'debug_sequence':
+                snapshot = parse_json((folder / 'snapshot.json').read_bytes())
+                summary = self._summary(folder, job) if job['state'] != 'prepared' else None
+                plan = snapshot['plan']
+                return {**result, 'version':job['version'], 'sequence':snapshot['sequence'], 'operation':'debug_sequence',
+                    'preview':{'plan':plan,'preflight':None,'sequence_mode':'debug','safety_policy':snapshot['safety_policy'],
+                               'cell_safety':require_safe_volumes(snapshot['sequence'],snapshot['safety_policy'],plan),
+                               'estimated_timed_seconds':sum(step.get('duration_s') or step.get('estimated_movement_s') or step.get('estimated_measurement_s') or 0 for step in plan['steps']),
+                               'warnings':snapshot.get('warnings',['调试流程不自动执行前置准备，需现场确认初始液量和接液条件。']),'hardware_executed':False},
+                    'workflow':{'phase':summary['state'] if summary else 'awaiting_debug_confirmation',
+                                'main_started':job['state']!='prepared','needs_advance':False}}
             if job.get('operation', 'sequence') == 'sequence':
                 snapshot = parse_json((folder / 'snapshot.json').read_bytes())
                 try:
@@ -456,6 +471,7 @@ class ExecutionManager:
         if not alive and state == 'failed' and not message:
             message = '控制进程已退出，未收到完整的结束记录；请检查设备状态。'
         return {key: job.get(key) for key in ('run_id', 'sequence_id', 'prepared_by', 'started_by', 'started_at', 'stop_requested_at', 'stop_requested_by', 'operation', 'target_run_id')} | {
+            'sequence_mode': job.get('sequence_mode','experiment'),
             'state': state, 'controller_alive': alive, 'can_stop': alive and state not in TERMINAL_STATES,
             'syringe_calibration_passed': bool(job.get('calibration_consumed_at')),
             'cell_preparation_passed': bool(job.get('cell_preparation_consumed_at')),
@@ -481,7 +497,9 @@ class ExecutionManager:
             return self.repository.logs_dir / ('run-' + job['run_id'] + '.jsonl') if job else None
 
     def _check_ports(self, devices, plan, station=None):
-        for name in dict.fromkeys(step['device'] for step in plan['steps']):
+        names = list(dict.fromkeys(step['device'] for step in plan['steps']))
+        names.extend(step['requires_source']['device'] for step in plan['steps'] if step.get('requires_source') and step['requires_source']['device'] not in names)
+        for name in names:
             path = Path(station['port'] if name == 'electrochemical_station' and station else devices['devices'][name]['port'])
             try:
                 mode = path.stat().st_mode
@@ -490,7 +508,16 @@ class ExecutionManager:
             if not stat.S_ISCHR(mode) or not os.access(path, os.R_OK | os.W_OK):
                 raise ApiError(422, name + '：串口类型或访问权限不符合要求。', 'serial_port_unavailable')
 
-    def start(self, run_id, expected_version, actor):
+    def start_debug(self, run_id, expected_version, actor, confirm_setup, confirm_homing_discharge=False):
+        self._enabled()
+        if type(confirm_setup) is not bool or type(confirm_homing_discharge) is not bool:
+            raise ApiError(400,'Invalid debug acknowledgement')
+        _, job = self._job(run_id)
+        if job.get('operation') != 'debug_sequence':
+            raise ApiError(422,'此接口仅用于没有前置块的调试流程。','not_debug_workflow')
+        return self.start(run_id,expected_version,actor,_debug_setup=confirm_setup,_debug_homing=confirm_homing_discharge)
+
+    def start(self, run_id, expected_version, actor, _debug_setup=False, _debug_homing=False):
         self._enabled()
         with self.lock:
             folder, job = self._job(run_id)
@@ -526,6 +553,14 @@ class ExecutionManager:
                 except ValueError as error:
                     raise ApiError(422, str(error), 'preflight_required') from error
                 require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
+            elif snapshot.get('operation') == 'debug_sequence':
+                if sequence_mode(snapshot['sequence']) != 'debug' or preparation_required(snapshot['sequence']):
+                    raise ApiError(422,'调试流程类型不匹配。','invalid_debug_workflow')
+                if _debug_setup is not True:
+                    raise ApiError(422,'请先确认调试初始液量、液路和现场条件。','debug_confirmation_required')
+                if any(step['action']=='initialize_syringe' for step in snapshot['plan']['steps']) and _debug_homing is not True:
+                    raise ApiError(422,'含回零动作时须确认机械排液条件。','discharge_confirmation_required')
+                require_safe_volumes(snapshot['sequence'],snapshot['safety_policy'],snapshot['plan'])
             self._check_ports(snapshot['devices'], snapshot['plan'], snapshot.get('station'))
             calibration = self._calibration_state(folder, job)
             if calibration['required'] and calibration['state'] != 'passed':
@@ -536,6 +571,8 @@ class ExecutionManager:
             if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
                 raise ApiError(503, '执行服务需要支持进程身份保护的 Linux 环境。', 'execution_unavailable')
             job.update(state='starting', started_by=actor, started_at=datetime.now(timezone.utc).isoformat())
+            if snapshot.get('operation') == 'debug_sequence':
+                job.update(debug_setup_confirmed=True,debug_homing_discharge_confirmed=_debug_homing)
             if calibration['required']:
                 job['calibration_consumed_at'] = calibration['completed_at']
             if cell_preparation['required']:

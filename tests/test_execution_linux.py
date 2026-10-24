@@ -30,6 +30,7 @@ class PseudoPump:
         self.buffer_state = '0'
         self.homing_count = 0
         self.homing_error = 0
+        self.initial_error = 0
         self.stop_error = False
         self.commands = []
         self.closed = threading.Event()
@@ -57,7 +58,7 @@ class PseudoPump:
                             self.homing_count += 1; self.position = 0; self.valve_position = 'o'; self.buffer_state = '0'
                         elif re.fullmatch(r'v[0-9]+V[0-9]+A[0-9]+R', command):
                             self.position = int(re.search(r'A([0-9]+)', command).group(1)); self.positions.append(self.position)
-                        status = (0x40 if self.busy else 0x60) | (self.homing_error if command=='Q' and self.homing_count else 0)
+                        status = (0x40 if self.busy else 0x60) | ((self.homing_error if self.homing_count else self.initial_error) if command=='Q' else 0)
                         os.write(self.master, b'/0' + bytes([status]) + payload.encode() + b'\x03\r\n')
                     continue
                 while len(pending) >= 8:

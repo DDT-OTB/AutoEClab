@@ -58,6 +58,7 @@ export function cvWaveform(p, maxCycles = 3) {
 }
 
 export function stepSummary(step, template) {
+  if(step.device==='syringe_c' && step.operation==='initialize')return '机械回零并校验 · 显式调试动作';
   if (isMeasurement(step)) {
     const p = step.parameters || {};
     return ['CV', Number.isFinite(p.scan_rate_v_s) ? (p.scan_rate_v_s*1000).toLocaleString() + ' mV/s' : '速率待设置',

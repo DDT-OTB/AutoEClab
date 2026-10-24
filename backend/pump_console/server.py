@@ -320,10 +320,11 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     with auth.db() as db:
                         auth.audit(db, 'function_block_saved/' + result['id'], session['user']['username'], self.request_peer)
                     return self.json_response(200, result)
-                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty', '/api/execution/advance'):
+                if path in ('/api/execution/prepare', '/api/execution/start', '/api/execution/debug-start', '/api/execution/stop', '/api/execution/calibrate', '/api/execution/drain', '/api/execution/confirm-empty', '/api/execution/advance'):
                     self.require_admin(session)
                     payload = self.body()
                     schemas = {'prepare': {'sequence'}, 'start': {'run_id', 'version'}, 'stop': {'run_id'},
+                               'debug-start':{'run_id','version','confirm_setup','confirm_homing_discharge'},
                                'calibrate': {'run_id', 'version', 'confirm_discharge'},
                                'drain': {'run_id', 'version', 'route', 'confirm_discharge', 'request_id'},
                                'confirm-empty': {'run_id', 'version', 'empty_confirmed'},
@@ -348,11 +349,13 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         result = repository.execution.confirm_empty(payload['run_id'], payload['version'], actor, payload['empty_confirmed'])
                     elif action == 'advance':
                         result = repository.execution.advance_workflow(payload['run_id'], payload['version'], actor, payload['confirm_discharge'], payload['empty_confirmed'])
+                    elif action == 'debug-start':
+                        result = repository.execution.start_debug(payload['run_id'],payload['version'],actor,payload['confirm_setup'],payload['confirm_homing_discharge'])
                     else:
                         result = repository.execution.stop(payload['run_id'], actor)
                     with auth.db() as db:
                         auth.audit(db, 'automation_' + action + '_accepted/' + (result.get('run_id') or result['execution']['run_id']), actor, self.request_peer)
-                    return self.json_response(202 if action == 'start' else 200, result)
+                    return self.json_response(202 if action in ('start','debug-start') else 200, result)
                 if any(value in path for value in ("/execute", "/command", "/probe", "/initialize", "/stop")):
                     raise ApiError(403, "Hardware execution and serial commands are disabled.", "hardware_disabled")
                 if path not in ("/api/preview", "/api/experiments"):

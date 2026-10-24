@@ -2,9 +2,10 @@ import { cvErrors, isMeasurement } from './cv.js';
 import { cellVolumes, defaultSafetyPolicy } from './cellSafety.js';
 import { flattenSequence, workflowSequence, workflowErrors, workflowToEditor, uiKey } from './workflow.js';
 import {preflightErrors} from './preflight.js';
+import {isDebug,modeFields} from './workflowMode.js';
 export { uiKey } from './workflow.js';
 export const fluidLabels = { water: '超纯水', waste_liquid: '废液', sulfuric_acid: '硫酸', electrolyte: '电解液' };
-export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量' };
+export const operationLabels = { inject: '注入', withdraw: '抽出', switch_route: '切换流路', measure: '测量',initialize:'机械回零' };
 export function toEditor(sequence) {
   if(sequence.schema_version===3) return workflowToEditor(sequence);
   return { ...sequence, steps: sequence.steps.map(step => ({ ...structuredClone(step), _key: uiKey() })) };
@@ -12,7 +13,7 @@ export function toEditor(sequence) {
 export function toSequence(draft) {
   if(draft.blocks) return workflowSequence(draft);
   return {
-    schema_version: 2, id: draft.id, description: draft.description,
+    schema_version: 2, id: draft.id, description: draft.description,...modeFields(draft),
     notes: draft.notes || ['Review this experiment before hardware execution.'],
     ...(draft.preflight?{preflight:structuredClone(draft.preflight)}:{}),
     steps: draft.steps.map(({ _key, ...step }) => structuredClone(step)),
@@ -48,6 +49,11 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
     const prefix = '第 ' + (index + 1) + ' 步';
     const template = templates[step.device];
     if (!template) { errors.push(prefix + '设备配置尚未就绪。'); return; }
+    if(step.device==='syringe_c' && step.operation==='initialize') {
+      if(!isDebug(draft))errors.push(prefix+'显式回零动作仅适用于调试模式。');
+      if(Object.keys(step).some(key=>!['device','operation','id','description','_key'].includes(key)))errors.push(prefix+'回零动作不接受体积或其他参数。');
+      return;
+    }
     if (step.operation !== template.action.operation) errors.push(prefix + '操作与模板不一致。');
     if (isMeasurement(step)) {
       if (step.device !== 'electrochemical_station' || step.technique !== 'cyclic_voltammetry') errors.push(prefix + '仅支持电化学工作站的循环伏安法。');
@@ -61,11 +67,12 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
         errors.push(prefix + '体积必须大于 0。');
       if (template.action.allowed_fluids?!template.action.allowed_fluids.includes(step.fluid):step.fluid !== template.action.fluid) errors.push(prefix + '液体与模板不一致。');
       if (template.action.type === 'drain' && template.action.routing_mode!=='direct' && !routes[template.action.valve_device]) errors.push(prefix + '抽液前，请先选择废液流路。');
-      if (template.action.source_valve && routes[template.action.source_valve]!==step.fluid) errors.push(prefix+'注射泵吸液前，请先选择相符入口：水为 5，电解液为 6。');
+      if (template.action.source_valve && routes[template.action.source_valve]!==step.fluid && !(isDebug(draft) && !routes[template.action.source_valve])) errors.push(prefix+'注射泵吸液前，请先选择相符入口：水为 5，电解液为 6。');
+      if(isDebug(draft) && template.action.source_valve && !routes[template.action.source_valve])routes[template.action.source_valve]=step.fluid;
       if (template.device.kind === 'syringe' && step.volume_ml > template.device.capacity_ml) errors.push(prefix + '超出注射泵容量。');
     }
   });
-  return [...errors,...cellVolumes(flat,safetyPolicy,templates).errors];
+  return [...errors,...cellVolumes(toSequence(draft),safetyPolicy,templates).errors];
 }
 export function formatDuration(seconds) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '待预演';

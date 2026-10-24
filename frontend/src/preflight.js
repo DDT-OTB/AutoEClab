@@ -1,6 +1,7 @@
 import template from '../../config/preflight_block.json' with {type:'json'};
 import policy from '../../config/safety_policy.json' with {type:'json'};
 import {preparedIsCurrent} from './automation.js';
+import {preparationRequired} from './workflowMode.js';
 export const isPreflight=block=>block?.type==='preflight';
 export function defaultPreflight() {
   const {schema_version,kind,...block}=structuredClone(template);return block;
@@ -15,6 +16,7 @@ export function validatePreflight(block,safetyPolicy) {
 }
 export function preflightErrors(sequence,safetyPolicy) {
   try {
+    if(!preparationRequired(sequence))return [];
     let block;
     if(sequence.schema_version===2) block=sequence.preflight;
     else {

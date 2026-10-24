@@ -27,7 +27,7 @@ function VoltageProgram({ parameters }) {
   </figure>;
 }
 
-export default function ActionInspector({ step, template, index, title, onChange }) {
+export default function ActionInspector({ step, template, index, title, onChange,debug=false }) {
   if (!step || !template) return <div className="inspector-empty"><MousePointer2 size={29} /><h3>选择一个动作</h3><p>点击流程节点，在这里编辑参数。</p></div>;
   const measurement = isMeasurement(step), config = template.device, p = step.parameters || {};
   const updateParameter = (key,value) => onChange({ parameters: { ...p, [key]: value } });
@@ -35,7 +35,7 @@ export default function ActionInspector({ step, template, index, title, onChange
     <div className={'action-editor-heading fluid-' + (measurement ? 'measurement' : step.fluid || 'valve')}>
       <span className="action-editor-icon"><ActionIcon kind={config.kind} size={22} /></span><div><span className="action-editor-index">步骤 {String(index+1).padStart(2,'0')} · {operationLabels[step.operation]}</span><h3>{title}</h3><p>{measurement ? '循环伏安法 · CV' : step.device}</p></div>
     </div>
-    {measurement ? <>
+    {step.device==='syringe_c' && step.operation==='initialize'?<section className="parameter-group"><h4>显式机械回零</h4><p className="parameter-hint">仅用于调试；启动前须确认回零排液的接液条件。控制器发送完整回零命令并回读零位和就绪状态，不接受体积参数，也不会生成正式实验的前置校验证明。</p></section>:measurement ? <>
       <div className="measurement-integration-note"><LockKeyhole size={15} /><span>{config.execution_supported?'EC110 · 参数由后端编码；执行时校验仪器身份并实时采集。当前电位限制 ±'+config.max_potential_v+' V。':'测量动作已预留，工作站尚未接入。可编辑并保存参数，当前不会进行实际测量。'}</span></div>
       <section className="parameter-group"><h4>电位窗口</h4><div className="parameter-grid">
         <NumberField label="起始电位" value={p.initial_potential_v} onChange={value => updateParameter('initial_potential_v',value)} unit="V" step="0.01" />
@@ -68,6 +68,7 @@ export default function ActionInspector({ step, template, index, title, onChange
         <NumberField label={step.operation === 'withdraw' ? '抽出体积' : '注入体积'} value={step.volume_ml} onChange={value => onChange({volume_ml:value})} unit="mL" min="0.001" max={config.capacity_ml} step="0.1" />
         <div className="parameter-flow-direction"><span>{step.operation === 'withdraw' ? '电解池' : fluidLabels[step.fluid] || step.fluid}</span><ArrowRight size={18} /><strong>{step.operation === 'withdraw' ? template.action.routing_mode==='direct'?'废液瓶':'所选废液流路' : '电解池'}</strong></div>
         {config.kind === 'syringe' && <p className="parameter-hint">注射泵会先从储液侧吸入，再向电解池注入所填体积；容量为 {config.capacity_ml} mL。</p>}
+        {debug && template.action.source_valve && <p className="parameter-hint">未编排切阀动作时，将回读当前入口是否与所选液体一致；不匹配则停止，不会自动切阀或回零。</p>}
         {template.action.type === 'drain' && <p className="parameter-hint">按系统设置增加 {Math.round(template.action.extra_time_fraction*100)}% 排液时间；{template.action.routing_mode==='direct'?'排液泵直接连接废液瓶，不切换注射泵入口阀。':'抽液前需先选择废液流路。'}</p>}
       </>}
       </section>

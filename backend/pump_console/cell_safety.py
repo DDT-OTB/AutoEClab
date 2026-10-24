@@ -3,7 +3,7 @@ from decimal import Decimal
 import json
 import math
 from pathlib import Path
-from .workflow import flatten_sequence
+from .workflow import flatten_sequence, sequence_mode, preparation_required
 
 
 class CellSafetyError(ValueError):
@@ -28,10 +28,15 @@ def load_policy(topology=None):
 
 
 def analyze_volumes(sequence, policy, plan=None):
+    debug = sequence_mode(sequence) == 'debug'
+    required = preparation_required(sequence)
+    initial = sequence.get('initial_cell_volume_ml', 0) if debug and not required else 0
     sequence = flatten_sequence(sequence)
     limit = Decimal(str(policy['cell']['capacity_ml']))
-    current, peak = Decimal(0), Decimal(0)
+    current = peak = Decimal(str(initial))
     rows, violations = [], []
+    if current > limit:
+        violations.append('声明的调试初始液量超过电解池容量。')
     for index, step in enumerate(sequence['steps'], 1):
         before = current
         operation = step.get('operation')
@@ -50,7 +55,8 @@ def analyze_volumes(sequence, policy, plan=None):
         if over:
             violations.append(f'第 {index} 步后预计池内液量 {float(current):g} mL，超过 {float(limit):g} mL 容量上限。')
         rows.append({'index': index, 'before_ml': float(before), 'after_ml': float(current), 'over_capacity': over})
-    return {'capacity_ml': float(limit), 'initial_volume_ml': 0, 'initial_state_requires_preflight': True,
+    return {'capacity_ml': float(limit), 'initial_volume_ml': float(initial), 'initial_state_requires_preflight': required,
+            'initial_volume_source': 'operator_declared_debug' if debug and not required else 'operator_confirmed_empty',
             'peak_volume_ml': float(peak), 'final_volume_ml': float(current), 'steps': rows,
             'valid': not violations, 'errors': violations, 'volume_measured': False}
 

@@ -18,12 +18,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BlockLibraryTests(unittest.TestCase):
-    setUp = test_api.ApiTests.setUp
+    def setUp(self):
+        test_api.ApiTests.setUp(self)
+        fixtures = [json.loads(path.read_text()) for path in (ROOT/'tests/fixtures/legacy_function_blocks').glob('*.json')]
+        patcher = patch('pump_console.block_library.function_block_templates',return_value=fixtures)
+        patcher.start();self.addCleanup(patcher.stop)
     tearDown = test_api.ApiTests.tearDown
     request = test_api.ApiTests.request
 
     def document(self, name='custom_rinse'):
-        value = deepcopy(next(block for block in function_block_templates() if block['id']=='water_rinse'))
+        value = json.loads((ROOT/'tests/fixtures/legacy_function_blocks/water_rinse.json').read_text())
         value['id'] = name
         return value
 

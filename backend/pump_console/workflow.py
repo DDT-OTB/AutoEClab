@@ -1,5 +1,6 @@
 """Two-level workflows expand to the existing controller format in one place."""
 from copy import deepcopy
+import math
 import json
 from pathlib import Path
 import re
@@ -68,11 +69,14 @@ def flatten_sequence(sequence, allow_empty=False):
     if not isinstance(sequence, dict):
         raise ValueError("实验方案须为 JSON 对象。")
     schema = sequence.get('schema_version')
+    sequence_mode(sequence)
     if type(schema) is not int or schema not in (2, 3):
         raise ValueError("实验方案需要 schema_version=2 或 3。")
     if schema == 2:
-        return {key: deepcopy(value) for key, value in sequence.items() if key != 'preflight'}
-    _fields(sequence, {"schema_version", "id", "description", "notes", "blocks"},
+        _fields(sequence, {'schema_version','id','description','notes','steps','preflight','mode','initial_cell_volume_ml'},
+                {'schema_version','id','description','steps'}, '方案')
+        return {key: deepcopy(value) for key, value in sequence.items() if key not in ('preflight','mode','initial_cell_volume_ml')}
+    _fields(sequence, {"schema_version", "id", "description", "notes", "blocks", "mode", "initial_cell_volume_ml"},
             {"schema_version", "id", "description", "blocks"}, "实验方案")
     if not isinstance(sequence['description'], str):
         raise ValueError("实验 description 须为文字。")
@@ -94,7 +98,7 @@ def flatten_sequence(sequence, allow_empty=False):
             steps.append({**deepcopy(action), 'id': f'block_{block_index:03d}_step_{action_index:03d}'})
         if len(steps) > MAX_ACTIONS:
             raise ValueError("一个实验最多包含 1024 个动作。")
-    return {**{key: deepcopy(value) for key, value in sequence.items() if key != 'blocks'},
+    return {**{key: deepcopy(value) for key, value in sequence.items() if key not in ('blocks','mode','initial_cell_volume_ml')},
             'schema_version': 2, 'steps': steps}
 
 
@@ -110,3 +114,25 @@ def block_ranges(sequence):
                        'first_step': offset + 1, 'last_step': offset + count})
         offset += count
     return result
+
+
+def sequence_mode(sequence):
+    mode = sequence.get('mode', 'experiment')
+    if mode not in ('experiment', 'debug'):
+        raise ValueError('方案 mode 必须为 experiment 或 debug。')
+    if 'initial_cell_volume_ml' in sequence:
+        amount = sequence['initial_cell_volume_ml']
+        try: valid = type(amount) in (int, float) and math.isfinite(amount) and amount >= 0
+        except OverflowError: valid = False
+        if mode != 'debug' or not valid:
+            raise ValueError('只有调试方案可填写非负的初始池内液量。')
+    return mode
+
+
+def has_preflight(sequence):
+    return (isinstance(sequence.get('preflight'), dict) or
+            any(isinstance(block, dict) and block.get('type') == 'preflight' for block in sequence.get('blocks', [])))
+
+
+def preparation_required(sequence):
+    return sequence_mode(sequence) != 'debug' or has_preflight(sequence)

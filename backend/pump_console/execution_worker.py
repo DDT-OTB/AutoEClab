@@ -11,7 +11,7 @@ from .execution import RUN_ID, initialization_plan, version, write_private
 from .measurement import compile_workflow, is_measurement
 from .repository import parse_json
 from .cell_safety import drain_sequence, load_policy, require_safe_volumes
-from .workflow import flatten_sequence
+from .workflow import flatten_sequence,sequence_mode,preparation_required
 from .preflight import require_preflight
 
 
@@ -29,7 +29,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     compiler = importlib.import_module('lab_automation.templates')
     controller = importlib.import_module('lab_automation.__main__')
     operation = snapshot.get('operation', 'sequence')
-    if operation not in ('sequence', 'calibrate_syringe', 'drain_cell'):
+    if operation not in ('sequence', 'debug_sequence', 'calibrate_syringe', 'drain_cell'):
         raise ValueError('Unsupported controller operation')
     if snapshot.get('safety_policy') != load_policy(snapshot.get('fluidic_topology')):
         raise ValueError('Safety policy changed; prepare the experiment again')
@@ -38,6 +38,12 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
         require_safe_volumes(snapshot['sequence'], snapshot['safety_policy'], snapshot['plan'])
         if not job.get('cell_preparation_consumed_at') or not job.get('cell_empty_confirmed_at'):
             raise ValueError('Experiment has no completed drain and operator empty-cell confirmation')
+    if operation == 'debug_sequence':
+        if sequence_mode(snapshot['sequence'])!='debug' or preparation_required(snapshot['sequence']) or job.get('debug_setup_confirmed') is not True:
+            raise ValueError('Debug workflow has no matching live setup acknowledgement')
+        if any(step['action']=='initialize_syringe' for step in snapshot['plan']['steps']) and job.get('debug_homing_discharge_confirmed') is not True:
+            raise ValueError('Debug homing requires explicit discharge confirmation')
+        require_safe_volumes(snapshot['sequence'],snapshot['safety_policy'],snapshot['plan'])
     if operation == 'drain_cell':
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Drain requires explicit discharge confirmation')
@@ -50,7 +56,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Explicit discharge confirmation is required for calibration')
         config.validate_devices(snapshot['devices'])
-    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'), snapshot.get('fluidic_topology'))
+    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'), snapshot.get('fluidic_topology'),debug=sequence_mode(snapshot['sequence'])=='debug')
     if plan != snapshot['plan'] or plan['unresolved'] or not plan['ready_for_hardware']:
         raise ValueError('Prepared plan did not pass controller validation')
     logs = root / 'logs/automation'
@@ -69,18 +75,18 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
 
     def event(kind, **fields):
         nonlocal cleanup_failed, serial_requests, completed_step_count, active_plan_step
-        if operation == 'sequence' and kind == 'step_started':
+        if operation in ('sequence','debug_sequence') and kind == 'step_started':
             if load_policy(snapshot.get('fluidic_topology')) != snapshot['safety_policy']:
                 raise ValueError('Cell safety policy changed during execution')
             if active_plan_step is not None or completed_step_count >= len(plan['steps']) or fields.get('step') != plan['steps'][completed_step_count]:
                 raise ValueError('Controller step does not match the validated sequence')
             active_plan_step = fields['step']
-        if operation == 'sequence' and kind == 'step_completed':
+        if operation in ('sequence','debug_sequence') and kind == 'step_completed':
             if active_plan_step is None or fields.get('id') != active_plan_step['id']:
                 raise ValueError('Controller completion does not match the active step')
             completed_step_count += 1
             active_plan_step = None
-        if operation == 'sequence' and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
+        if operation in ('sequence','debug_sequence') and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
             raise ValueError('Controller reported completion before all validated steps finished')
         if kind in ('serial_reply', 'serial_error'):
             serial_requests += 1
@@ -111,12 +117,13 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                             'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
                         publish(initialization_verified=True)
                     else:
-                        if any(step['action'] == 'measurement' for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
-                            if (operation != 'sequence' and any(step['action'] == 'measurement' for step in plan['steps'])) or runner_factory is not None:
+                        if operation=='debug_sequence' or any(step['action'] == 'measurement' for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
+                            if (operation not in ('sequence','debug_sequence') and any(step['action'] == 'measurement' for step in plan['steps'])) or runner_factory is not None:
                                 raise ValueError('Mixed CV execution requires the fixed workstation adapter')
                             from .mixed_runner import run_mixed
                             run_mixed(snapshot['devices']['devices'], plan, event, controller, snapshot.get('station'),
-                                      Path(run_directory).resolve().parent, run_id, job['started_by'])
+                                      Path(run_directory).resolve().parent, run_id, job['started_by'],
+                                      execution_mode='debug_sequence' if sequence_mode(snapshot['sequence'])=='debug' else operation)
                         else:
                             factory = runner_factory or controller.Runner
                             factory(snapshot['devices']['devices'], plan, event).run()
@@ -125,7 +132,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                 finally:
                     journal.close()
                     journal = None
-        message = '本次实验的注射泵回零校验已通过。' if operation == 'calibrate_syringe' else '启动前排液动作完成，等待管理员现场确认空池。' if operation == 'drain_cell' else '全部步骤执行完成。'
+        message = '本次实验的注射泵回零校验已通过。' if operation == 'calibrate_syringe' else '启动前排液动作完成，等待管理员现场确认空池。' if operation == 'drain_cell' else '调试流程的全部动作已完成。' if operation=='debug_sequence' else '全部步骤执行完成。'
         publish(state='completed', message=message, exit_code=0)
         code = 0
     except BaseException as error:

@@ -40,6 +40,10 @@ export function equipmentDevices(templates, measurementTemplates, status, fresh)
   return items;
 }
 export function confirmedSourceRoute(items,runtime,fresh) {
+  const observed=runtime?.selector_position;
+  const age=observed?.at?Date.now()-Date.parse(observed.at):Infinity;
+  if(fresh && ['running','completed'].includes(runtime?.state) && [5,6].includes(observed?.channel) && (runtime.state==='running' || age>=0 && age<=30000))
+    return {...observed,route:observed.channel===5?'water':'electrolyte',source:'controller'};
   const value=confirmedWasteRoute(items,runtime,fresh);
   return value?{...value,route:value.channel===5?'water':'electrolyte'}:null;
 }

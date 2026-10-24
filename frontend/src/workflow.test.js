@@ -10,7 +10,7 @@ import {cellVolumes} from './cellSafety.js';
 const read=path=>JSON.parse(fs.readFileSync(new URL('../../'+path,import.meta.url)));
 const experiment=read('config/examples/demo_blocks.json');
 const legacy=read('tests/fixtures/demo-lab/config/sequences/demo_rinse_with_predrain.json');
-const template=read('config/function_blocks/water_rinse.json');
+const template=read('tests/fixtures/legacy_function_blocks/water_rinse.json');
 const deviceTemplates=Object.fromEntries(['peristaltic_1','peristaltic_2','peristaltic_3','syringe_c','valve'].map(id=>[id,read('tests/fixtures/demo-lab/config/templates/'+id+'.json')]));
 
 test('two-level roundtrip retains every block and action while stripping editor identities',()=>{
