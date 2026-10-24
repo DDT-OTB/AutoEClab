@@ -79,6 +79,7 @@ class CVExecutionTests(unittest.TestCase):
         self.station = PseudoStation()
         self.repo.station = station_policy(dict(enabled=True, port=self.station.port))
         parameters = measurement_templates(self.repo.station)['electrochemical_station']['action']['default_parameters']
+        parameters.update(upper_potential_v=.1, lower_potential_v=-.1)
         self.sequence['steps'][0]['volume_ml'] = .02
         self.sequence['steps'] += [dict(device='electrochemical_station', operation='measure',
             technique='cyclic_voltammetry', parameters=parameters),

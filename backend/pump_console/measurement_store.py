@@ -2,6 +2,8 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import csv
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -15,6 +17,24 @@ DATASET_ID = re.compile(r'cv-[a-f0-9]{32}')
 POINT_COLUMNS = ['index', 'time_s', 'potential_v', 'current_a']
 CSV_COLUMNS = ['index', 'received_elapsed_s', 'potential_v_nominal', 'current_a_nominal',
                'adc_mean_code', 'dac_code', 'sensitivity', 'current_gain', 'dac_vref_mv', 'sample_count']
+
+
+class MeasurementBusyError(ValueError):
+    pass
+
+
+class MeasurementConflictError(ValueError):
+    pass
+
+
+def metadata_version(metadata):
+    value = {key: entry for key, entry in metadata.items() if key != 'version'}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    allow_nan=False, separators=(',', ':')).encode()).hexdigest()
+
+
+def with_version(metadata):
+    return {**metadata, 'version': metadata_version(metadata)}
 
 
 def now():
@@ -70,6 +90,10 @@ class MeasurementStore:
                     time_s REAL NOT NULL, potential_v REAL NOT NULL, current_a REAL NOT NULL,
                     PRIMARY KEY(dataset_id, point_index)
                 );
+                CREATE TABLE IF NOT EXISTS measurement_deletions (
+                    dataset_id TEXT PRIMARY KEY REFERENCES datasets(id), deleted_at TEXT NOT NULL,
+                    deletion_id TEXT NOT NULL, deleted_by TEXT NOT NULL, version TEXT NOT NULL
+                );
             ''')
         self.database.chmod(0o600)
 
@@ -106,7 +130,7 @@ class MeasurementStore:
                         nominal_conversion=True, time_basis='server_receive_time',
                         stop_confirmed=False, message=None, statistics={}, provenance=provenance)
         with self.db() as db:
-            db.execute('INSERT INTO datasets VALUES (?,?,?,?,?,?,?)',
+            db.execute('INSERT INTO datasets(id,run_id,sequence_id,step_id,created_at,state,metadata) VALUES (?,?,?,?,?,?,?)',
                        (dataset_id, run_id, sequence_id, step['id'], metadata['created_at'],
                         metadata['state'], json.dumps(metadata, ensure_ascii=False, allow_nan=False)))
         private_json(folder / 'metadata.json', metadata)
@@ -115,17 +139,17 @@ class MeasurementStore:
     def get(self, dataset_id):
         self.folder(dataset_id)
         with self.db() as db:
-            row = db.execute('SELECT metadata FROM datasets WHERE id=?', (dataset_id,)).fetchone()
+            row = db.execute('SELECT metadata FROM datasets WHERE id=? AND NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=datasets.id)', (dataset_id,)).fetchone()
         if row is None:
             raise FileNotFoundError('Measurement does not exist')
-        return json.loads(row['metadata'])
+        return with_version(json.loads(row['metadata']))
 
     def list(self, query='', state='', limit=50, offset=0):
         if not isinstance(query, str) or len(query) > 160 or state not in ('', 'starting', 'running', 'completed', 'stopped', 'failed', 'imported'):
             raise ValueError('Invalid measurement filter')
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 100000:
             raise ValueError('Invalid measurement page')
-        where, values = [], []
+        where, values = ['NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=datasets.id)'], []
         if query:
             where.append('(id LIKE ? ESCAPE "!" OR sequence_id LIKE ? ESCAPE "!" OR step_id LIKE ? ESCAPE "!")')
             pattern = '%' + query.replace('!', '!!').replace('%', '!%').replace('_', '!_') + '%'
@@ -136,7 +160,7 @@ class MeasurementStore:
         with self.db() as db:
             count = db.execute('SELECT count(*) FROM datasets' + condition, values).fetchone()[0]
             rows = db.execute('SELECT metadata FROM datasets' + condition + ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', values + [limit, offset]).fetchall()
-        return dict(measurements=[json.loads(row['metadata']) for row in rows], total=count,
+        return dict(measurements=[with_version(json.loads(row['metadata'])) for row in rows], total=count,
                     next_offset=offset + limit if offset + limit < count else None)
 
     def points(self, dataset_id, limit=1800):
@@ -166,10 +190,10 @@ class MeasurementStore:
 
     def latest(self):
         with self.db() as db:
-            row = db.execute('SELECT metadata FROM datasets ORDER BY created_at DESC, id DESC LIMIT 1').fetchone()
+            row = db.execute('SELECT metadata FROM datasets WHERE NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=datasets.id) ORDER BY created_at DESC, id DESC LIMIT 1').fetchone()
         if row is None:
             return None
-        metadata = json.loads(row['metadata'])
+        metadata = with_version(json.loads(row['metadata']))
         live = self.folder(metadata['id']) / 'live.json'
         points = None
         if live.is_file() and not live.is_symlink():
@@ -189,6 +213,67 @@ class MeasurementStore:
             raise FileNotFoundError('Measurement file is unavailable')
         return path, dataset_id + ('.csv' if kind == 'csv' else '.json' if kind == 'json' else '-raw.jsonl')
 
+    def delete(self, dataset_id, expected_version, actor):
+        """Hide one terminal dataset and atomically archive its files, retaining all points."""
+        folder = self.folder(dataset_id)
+        if not isinstance(expected_version, str) or not re.fullmatch(r'[a-f0-9]{64}', expected_version):
+            raise ValueError('Expected the current measurement version')
+        if not isinstance(actor, str) or not actor:
+            raise ValueError('Deletion requires a server-authenticated actor')
+        lock = None
+        archive = None
+        moved = False
+        try:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                row = db.execute('SELECT d.metadata,x.deleted_at,x.deletion_id FROM datasets d LEFT JOIN measurement_deletions x ON x.dataset_id=d.id WHERE d.id=?', (dataset_id,)).fetchone()
+                if row is None:
+                    raise FileNotFoundError('Measurement does not exist')
+                metadata = json.loads(row['metadata'])
+                if metadata_version(metadata) != expected_version:
+                    raise MeasurementConflictError('测量记录已更新，请刷新后重新确认删除。')
+                if row['deleted_at'] is not None:
+                    return dict(deleted=True, already_deleted=True, id=dataset_id, trash_id=row['deletion_id'])
+                if metadata['state'] not in ('completed', 'stopped', 'failed', 'imported'):
+                    raise MeasurementBusyError('正在采集或状态待确认的数据不能删除，请等待采集结束。')
+                if not folder.is_dir():
+                    raise FileNotFoundError('Measurement files are unavailable')
+                lock_path = folder / 'writer.lock'
+                if lock_path.is_symlink():
+                    raise ValueError('Invalid measurement lock path')
+                lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise MeasurementBusyError('采集文件仍在写入，请稍后刷新再删除。') from exc
+                trash = self.root / 'trash'
+                if trash.is_symlink():
+                    raise ValueError('Invalid measurement archive path')
+                trash.mkdir(exist_ok=True, mode=0o700); trash.chmod(0o700)
+                deletion_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(8)
+                archive = trash / deletion_id
+                archive.mkdir(mode=0o700)
+                deleted_at = now()
+                private_json(archive / 'deletion.json', dict(id=dataset_id, deleted_at=deleted_at,
+                    deleted_by=actor, version=expected_version, metadata=metadata,
+                    retained_sqlite_points=True))
+                os.replace(folder, archive / dataset_id)
+                moved = True
+                db.execute('INSERT INTO measurement_deletions VALUES (?,?,?,?,?)',
+                           (dataset_id, deleted_at, deletion_id, actor, expected_version))
+            return dict(deleted=True, already_deleted=False, id=dataset_id, trash_id=deletion_id)
+        except BaseException:
+            if moved and archive is not None:
+                os.replace(archive / dataset_id, folder)
+                moved = False
+            if archive is not None and not moved:
+                (archive / 'deletion.json').unlink(missing_ok=True)
+                archive.rmdir()
+            raise
+        finally:
+            if lock is not None:
+                os.close(lock)
+
 
 class DatasetWriter:
     def __init__(self, store, metadata):
@@ -197,11 +282,20 @@ class DatasetWriter:
         self.trace = []
         self.last_publish = 0
         self.raw_bytes = 0
-        self.raw = self._open('frames.jsonl')
-        self.csv = self._open('points.csv')
-        self.csv_writer = csv.writer(self.csv)
-        self.csv_writer.writerow(CSV_COLUMNS)
         self.closed = False
+        self.writer_lock = os.open(self.folder / 'writer.lock', os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+        fcntl.flock(self.writer_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.raw = self.csv = None
+        try:
+            self.raw = self._open('frames.jsonl')
+            self.csv = self._open('points.csv')
+            self.csv_writer = csv.writer(self.csv)
+            self.csv_writer.writerow(CSV_COLUMNS)
+        except BaseException:
+            if self.raw is not None: self.raw.close()
+            if self.csv is not None: self.csv.close()
+            os.close(self.writer_lock); self.closed = True
+            raise
 
     def _open(self, name):
         fd = os.open(self.folder / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -241,6 +335,8 @@ class DatasetWriter:
         self.publish()
 
     def publish(self, force=False, **fields):
+        if self.closed:
+            raise ValueError('Measurement writer is closed')
         self.metadata.update(fields)
         if not force and time.monotonic() - self.last_publish < .4:
             return
@@ -259,4 +355,10 @@ class DatasetWriter:
             self.publish(force=True, state=state, stop_confirmed=stop_confirmed,
                          message=message, finished_at=now(), **fields)
         finally:
-            self.raw.close(); self.csv.close(); self.closed = True
+            try:
+                self.raw.close()
+            finally:
+                try:
+                    self.csv.close()
+                finally:
+                    os.close(self.writer_lock); self.closed = True

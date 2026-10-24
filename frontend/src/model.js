@@ -37,8 +37,8 @@ export function moveStep(steps, from, to) {
 }
 export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) {
   const errors = [];
-  if(draft.blocks) errors.push(...workflowErrors(toSequence(draft)));
-  else errors.push(...preflightErrors(draft));
+  if(draft.blocks) errors.push(...workflowErrors(toSequence(draft),safetyPolicy));
+  else errors.push(...preflightErrors(draft,safetyPolicy));
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(draft.id)) errors.push('方案 ID 请使用字母开头的英文、数字、下划线或短横线。');
   if (/[\u3400-\u9fff]/.test(JSON.stringify(toSequence(draft)))) errors.push('保存的 JSON 内容请使用英文。');
   const flat=flattenSequence(toSequence(draft));
@@ -50,16 +50,18 @@ export function draftErrors(draft, templates, safetyPolicy=defaultSafetyPolicy) 
     if (!template) { errors.push(prefix + '设备配置尚未就绪。'); return; }
     if (step.operation !== template.action.operation) errors.push(prefix + '操作与模板不一致。');
     if (isMeasurement(step)) {
-      if (step.device !== 'electrochemical_station' || step.technique !== 'cyclic_voltammetry') errors.push(prefix + '仅支持电化学工作站的循环伏安法草稿。');
+      if (step.device !== 'electrochemical_station' || step.technique !== 'cyclic_voltammetry') errors.push(prefix + '仅支持电化学工作站的循环伏安法。');
       errors.push(...cvErrors(step.parameters).map(message => prefix + '：' + message));
+      if(Number.isFinite(template.device.max_potential_v) && ['initial_potential_v','upper_potential_v','lower_potential_v','final_potential_v'].some(key=>Number.isFinite(step.parameters?.[key]) && Math.abs(step.parameters[key])>template.device.max_potential_v)) errors.push(prefix+'电位超出仪器允许范围 ±'+template.device.max_potential_v+' V。');
     } else if (template.device.kind === 'valve') {
       if (!(step.route in template.device.routes)) errors.push(prefix + '流路未定义。');
       routes[step.device] = step.route;
     } else {
       if (typeof step.volume_ml !== 'number' || !Number.isFinite(step.volume_ml) || step.volume_ml <= 0)
         errors.push(prefix + '体积必须大于 0。');
-      if (step.fluid !== template.action.fluid) errors.push(prefix + '液体与模板不一致。');
-      if (template.action.type === 'drain' && !routes[template.action.valve_device]) errors.push(prefix + '抽液前，请先选择废液流路。');
+      if (template.action.allowed_fluids?!template.action.allowed_fluids.includes(step.fluid):step.fluid !== template.action.fluid) errors.push(prefix + '液体与模板不一致。');
+      if (template.action.type === 'drain' && template.action.routing_mode!=='direct' && !routes[template.action.valve_device]) errors.push(prefix + '抽液前，请先选择废液流路。');
+      if (template.action.source_valve && routes[template.action.source_valve]!==step.fluid) errors.push(prefix+'注射泵吸液前，请先选择相符入口：水为 5，电解液为 6。');
       if (template.device.kind === 'syringe' && step.volume_ml > template.device.capacity_ml) errors.push(prefix + '超出注射泵容量。');
     }
   });

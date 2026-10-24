@@ -46,3 +46,5 @@ Commands read passwords interactively without echoing them. Do not place real cr
 - [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
 - [OWASP CSRF Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
+
+Measurement deletion requires an administrator, CSRF protection and the observed record version. Active writers hold a file lock through finalization; deletion refuses active or changed records, atomically moves completed files into a private archive and retains an audit manifest and indexed points. No browser route permanently purges archived data.

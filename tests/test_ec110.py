@@ -14,7 +14,7 @@ from pump_console.measurement_store import MeasurementStore
 
 
 def profile():
-    return station_policy(dict(enabled=True, port='/dev/pts/synthetic'))
+    return station_policy(dict(enabled=True, port='/dev/pts/synthetic', max_potential_v=.1, max_cycles=10))
 
 
 def parameters():
@@ -102,6 +102,32 @@ class EC110Tests(unittest.TestCase):
         self.assertFalse(e['timing_basis']['independently_verified'])
         self.assertAlmostEqual(e['single_step_dac_code'] * .12 / 32767.5 /
                                (e['single_step_time_us'] * 1e-6), p['scan_rate_v_s'], delta=.001)
+
+    def test_full_protocol_voltage_range_is_available_without_small_window_cap(self):
+        settings = station_policy(dict(enabled=True, port='/dev/pts/synthetic'))
+        p = {**parameters(), 'upper_potential_v': 3, 'lower_potential_v': -3}
+        encoded = encode_cv(p, settings)
+        self.assertEqual((encoded['low_potential_mv'], encoded['high_potential_mv']), (-3000, 3000))
+        self.assertEqual(settings['max_cycles'], 499)
+        self.assertEqual(measurement_templates(settings)['electrochemical_station']['action']['default_parameters']['upper_potential_v'], .5)
+        with self.assertRaises(ValueError): encode_cv({**p, 'upper_potential_v': 3.001}, settings)
+
+    def test_nominal_dac_calibration_offset_at_full_range_does_not_false_abort(self):
+        settings = station_policy(dict(enabled=True, port='/dev/pts/synthetic'))
+        self.session = EC110Session(settings, lambda *args, **kwargs:None,
+                                    serial_factory=lambda *args, **kwargs:self.device, kernel_exclusive=False)
+        p = {**parameters(), 'upper_potential_v':3, 'lower_potential_v':-3}
+        self.step = dict(id='wide_cv', description='Synthetic full-range CV', parameters=p,
+                         estimated_measurement_s=validate_cv(p))
+        packet = data_frame();payload = bytearray(packet[9:-2]);struct.pack_into('>i',payload,16,3600)
+        self.device.stream = packet[:9] + bytes(payload) + b'\xbb\xee'
+        self.session.open()
+        writer = self.store.create('synthetic_wide','synthetic_sequence',self.step,'admin',encode_cv(p,settings))
+        self.session.measure(self.step,writer)
+        saved = self.store.get(writer.metadata['id'])
+        self.assertEqual(saved['state'],'completed')
+        self.assertGreater(saved['statistics']['potential_v_max'],3)
+        self.assertTrue(saved['nominal_conversion']);self.assertTrue(saved['stop_confirmed'])
 
     def test_negative_direction_multiple_cycles_and_fixed_range(self):
         p = {**parameters(), 'cycles': 2, 'initial_scan_direction': 'negative', 'current_range_a': .001}

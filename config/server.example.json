@@ -7,13 +7,15 @@
   "electrochemical_station": {
     "enabled": false,
     "port": "",
-    "max_potential_v": 0.1,
-    "max_cycles": 10,
+    "max_potential_v": 3,
+    "max_cycles": 499,
     "dac_reference_mv": 120,
     "step_time_unit_ns": 1000,
     "timing_verified": false
   },
-  "automation": {"prepare_ttl_seconds": 600},
+  "automation": {
+    "prepare_ttl_seconds": 600
+  },
   "authentication": {
     "enabled": true,
     "transport": "ssh_loopback",
@@ -39,5 +41,6 @@
   "monitoring": {
     "push_interval_seconds": 1,
     "stale_after_seconds": 15
-  }
+  },
+  "fluidic_topology": "legacy_waste_selector"
 }

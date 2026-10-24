@@ -12,8 +12,9 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
     device_module = importlib.import_module('lab_automation.devices')
     pump_plan = {**plan, 'steps': [step for step in plan['steps'] if step['action'] != 'measurement']}
     runner = controller.Runner(devices, pump_plan, event)
-    session = station_factory(station, event)
-    store = MeasurementStore(data_root)
+    measuring = any(step['action'] == 'measurement' for step in plan['steps'])
+    session = station_factory(station, event) if measuring else None
+    store = MeasurementStore(data_root) if measuring else None
     def cleanup_event(kind, **fields):
         try:
             event(kind, **fields)
@@ -22,7 +23,8 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
     try:
         used = list(dict.fromkeys(step['device'] for step in pump_plan['steps']))
         resolved = [os.path.realpath(devices[name]['port']) for name in used]
-        resolved.append(os.path.realpath(station['port']))
+        if measuring:
+            resolved.append(os.path.realpath(station['port']))
         if len(set(resolved)) != len(resolved):
             raise ValueError('Pump and workstation device aliases share a serial port')
         for name in used:
@@ -39,7 +41,8 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
             else:
                 device.preflight()
             event('preflight_passed', device=name)
-        session.open()
+        if session:
+            session.open()
         event('sequence_started', sequence=plan['sequence_id'])
         for step in plan['steps']:
             event('step_started', step=step)
@@ -54,11 +57,18 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
                     if not valve.normal() or valve.channel() != step['required_channel']:
                         raise ValueError('Waste valve position does not match the validated plan')
                     device.run(step)
+                elif action == 'drain_direct':
+                    device.run(step)
                 elif action == 'dose':
                     device.run(step)
                 elif action == 'switch_valve':
                     device.goto(step['channel'])
                 elif action == 'syringe_transfer':
+                    if step.get('requires_source'):
+                        source = step['requires_source']
+                        valve = runner.devices[source['device']]
+                        if not valve.normal() or valve.channel() != source['channel']:
+                            raise ValueError('注射泵吸液前回读的入口通道与液体不匹配，未开始吸液。')
                     device.transfer(step)
                 elif action == 'wait':
                     runner.sleep(step['seconds'])
@@ -80,7 +90,8 @@ def run_mixed(devices, plan, event, controller, station, data_root, run_id, acto
         raise
     finally:
         try:
-            session.close()
+            if session:
+                session.close()
         except Exception as exc:
             cleanup_event('close_failed', device='electrochemical_station', message=str(exc))
         for link in reversed(runner.links):

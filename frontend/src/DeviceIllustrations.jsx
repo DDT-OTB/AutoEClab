@@ -121,7 +121,7 @@ export function WasteBottleDrawing({ name, channel, confirmed, prefix }) {
     <rect x="16" y="3" width="20" height="9" rx="3" className="waste-bottle-cap"/>
     <path d="M 26 0 V 7" className="waste-bottle-inlet"/>
     <rect x="12" y="31" width="28" height="19" rx="3" className="waste-bottle-label"/>
-    <text x="26" y="44" textAnchor="middle" className="waste-bottle-code">W{channel===5?'1':'2'}</text>
-    <text x="26" y="76" textAnchor="middle" className="waste-bottle-name">{name} · CH{channel}</text>
+    <text x="26" y="44" textAnchor="middle" className="waste-bottle-code">{channel===5?'W1':channel===6?'W2':'W'}</text>
+    <text x="26" y="76" textAnchor="middle" className="waste-bottle-name">{name}{channel?' · CH'+channel:''}</text>
   </g>;
 }

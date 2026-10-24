@@ -17,12 +17,12 @@ def is_preflight(block):
 
 def validate_preflight(block, policy=None):
     from .cell_safety import load_policy
-    policy = policy or load_policy()
+    allowed = policy['cell']['allowed_waste_routes'] if policy is not None else ('waste_1', 'waste_2', 'waste')
     steps = block.get('steps')
     if not isinstance(steps, list) or len(steps) != 3:
         raise ValueError('前置准备功能块必须包含回零、排空、人工空池确认三个固定步骤。')
     route = steps[1].get('route') if isinstance(steps[1], dict) else None
-    if route not in policy['cell']['allowed_waste_routes']:
+    if route not in allowed:
         raise ValueError('前置准备功能块须选择有效的废液流路。')
     expected = [{'device': 'syringe_c', 'operation': 'home_if_used'},
                 {'device': 'cell', 'operation': 'drain_to_waste', 'route': route},
@@ -56,4 +56,4 @@ def require_preflight(sequence, policy=None):
     return {'block_id': block['id'], 'type': 'preflight', 'steps': deepcopy(block['steps']),
             'requires_syringe': any(step.get('device') == 'syringe_c' for step in flat['steps']),
             'route': block['steps'][1]['route'], 'predrain_volume_ml': policy['cell']['predrain_volume_ml'],
-            'operator_confirmation_required': True}
+            'operator_confirmation_required': True, 'drain_mode': policy['cell'].get('drain_mode', 'selector')}

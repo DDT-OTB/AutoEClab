@@ -33,7 +33,15 @@ export function equipmentDevices(templates, measurementTemplates, status, fresh)
     template, config:template?.device || {kind:'electrochemical'},
     activity:integrated?deviceActivity(device,status.runtime,fresh):{state:'not_integrated',label:'尚未接入'},
   });
+  if(templates.valve?.action.role==='syringe_inlet_selector') {
+    Object.assign(items.find(item=>item.id==='valve') || {},{name:'六通入口选液阀',shortName:'入口选液阀',subtitle:'5 水 · 6 电解液',group:'吸液侧',tone:'electrolyte'});
+    Object.assign(items.find(item=>item.id==='syringe_c') || {},{name:'注射泵 · 水 / 电解液',subtitle:'从六通阀选液后注入',group:'注入侧'});
+  }
   return items;
+}
+export function confirmedSourceRoute(items,runtime,fresh) {
+  const value=confirmedWasteRoute(items,runtime,fresh);
+  return value?{...value,route:value.channel===5?'water':'electrolyte'}:null;
 }
 
 export function equipmentSummary(items) {

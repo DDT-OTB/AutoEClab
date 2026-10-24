@@ -52,7 +52,7 @@ def identifier(value):
 
 
 class LabRepository:
-    def __init__(self, lab_root, data_root, monitoring=None, device_status=None, execution_enabled=False, automation=None, station=None):
+    def __init__(self, lab_root, data_root, monitoring=None, device_status=None, execution_enabled=False, automation=None, station=None, topology=None):
         self.root = Path(lab_root).resolve()
         self.templates_dir = self.root / "config/templates"
         self.sequences_dir = self.root / "config/sequences"
@@ -61,6 +61,8 @@ class LabRepository:
         from .ec110 import station_policy
         from .measurement_store import MeasurementStore
         self.station = station_policy(station)
+        from .topology import topology_mode
+        self.topology = topology_mode(topology)
         self.measurements = MeasurementStore(self.data_root)
         self.lock = threading.RLock()
         self.monitoring = {"push_interval_seconds": 1, "stale_after_seconds": 15, **(monitoring or {})}
@@ -79,22 +81,28 @@ class LabRepository:
 
     def templates(self):
         _, templates = self.compiler.load_templates(self.templates_dir)
-        return templates
+        from .topology import view_templates
+        return view_templates(templates, self.topology)
+
+    def safety_policy(self):
+        return load_policy(self.topology)
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.13.0",
+            "ok": True, "service": "pump-console", "version": "0.14.0",
             "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,
             "workflow_schema_versions": [2, 3],
             "mode": "automation" if self.execution.enabled else "configuration", "hardware_execution_enabled": self.execution.enabled,
             "automation_administrator_required": True,
             "syringe_calibration_required_before_each_experiment": True,
-            "cell_capacity_ml": load_policy()['cell']['capacity_ml'],
+            "cell_capacity_ml": self.safety_policy()['cell']['capacity_ml'],
             "cell_preparation_required_before_each_experiment": True,
             "serial_probe_enabled": False, "status_mode": "controller_events",
             "read_only_status_enabled": self.device_status.policy["enabled"],
             "measurement_execution_enabled": self.station['enabled'] and self.execution.enabled,
+            "fluidic_topology": self.topology,
+            "measurement_delete_administrator_required": True,
             "measurement_techniques": ['cyclic_voltammetry'],
             "cv_timing_verified": self.station['timing_verified'],
             "lab_root": str(self.root), "server_time": utc_now(),
@@ -110,18 +118,18 @@ class LabRepository:
         try:
             if _internal_drain:
                 from .cell_safety import drain_sequence
-                if sequence != drain_sequence(load_policy(), sequence['steps'][0]['route']):
+                if sequence != drain_sequence(self.safety_policy(), sequence['steps'][0].get('route', 'waste')):
                     raise ValueError('Invalid internal startup drain')
                 preflight = None
             else:
-                preflight = require_preflight(sequence)
+                preflight = require_preflight(sequence, self.safety_policy())
             flattened = flatten_sequence(sequence)
             devices, templates = _templates or self.compiler.load_templates(self.templates_dir)
-            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config, self.station)
+            plan = compile_workflow(sequence, devices, templates, self.compiler, self.config, self.station, self.topology)
         except (ValueError, KeyError, TypeError) as error:
             raise ApiError(422, str(error), "validation_error") from error
         try:
-            cell_safety = require_safe_volumes(sequence, load_policy(), plan)
+            cell_safety = require_safe_volumes(sequence, self.safety_policy(), plan)
         except CellSafetyError as error:
             raise ApiError(422, str(error), 'cell_capacity_exceeded') from error
         timing = sum(
@@ -137,7 +145,7 @@ class LabRepository:
         return {"valid": True, "plan": plan, "warnings": warnings, "estimated_timed_seconds": timing,
                 "preflight": preflight,
                 "blocks": block_ranges(sequence),
-                "cell_safety": cell_safety, "safety_policy": load_policy(),
+                "cell_safety": cell_safety, "safety_policy": self.safety_policy(),
                 "hardware_executed": False, "generated_at": utc_now()}
 
     def _sequence_path(self, name):
@@ -463,10 +471,10 @@ class LabRepository:
         if current and current['controller_alive']:
             return {"scan": {"state": "skipped", "reason": "controller_active"}, "status": self.status(),
                     "health": self.health(), "runs": self.runs(), "templates": self.templates(),
-                    "measurement_templates": measurement_templates(self.station)}
+                    "measurement_templates": measurement_templates(self.station), "safety_policy": self.safety_policy()}
         try:
             scan = self.device_status.refresh(self.templates())
         except RefreshBusy:
             raise ApiError(409, "正在刷新设备状态，请稍候。", "status_refresh_busy")
         return {"scan": scan, "status": self.status(), "health": self.health(), "runs": self.runs(), "templates": self.templates(),
-                "measurement_templates": measurement_templates(self.station)}
+                "measurement_templates": measurement_templates(self.station), "safety_policy": self.safety_policy()}

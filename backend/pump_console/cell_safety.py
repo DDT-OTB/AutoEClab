@@ -10,7 +10,7 @@ class CellSafetyError(ValueError):
     pass
 
 
-def load_policy():
+def load_policy(topology=None):
     value = json.loads((Path(__file__).resolve().parents[2] / 'config/safety_policy.json').read_text())
     cell = value['cell']
     if (value.get('schema_version') != 1 or type(cell['capacity_ml']) not in (int, float) or
@@ -20,6 +20,10 @@ def load_policy():
             cell['initial_state'] != 'operator_confirmed_empty' or
             not cell['allowed_waste_routes'] or any(route not in ('waste_1', 'waste_2') for route in cell['allowed_waste_routes'])):
         raise ValueError('Invalid cell safety policy')
+    from .topology import topology_mode, INLET
+    if topology_mode(topology) == INLET:
+        cell['allowed_waste_routes'] = ['waste']
+        cell['drain_mode'] = 'direct'
     return value
 
 
@@ -62,6 +66,10 @@ def drain_sequence(policy, route):
     cell = policy['cell']
     if route not in cell['allowed_waste_routes']:
         raise CellSafetyError('请显式选择允许的废液流路。')
+    if cell.get('drain_mode') == 'direct':
+        return {'schema_version': 2, 'id': 'cell_startup_drain', 'description': 'Mandatory direct cell startup drain',
+                'steps': [{'device': cell['drain_device'], 'operation': 'withdraw',
+                           'volume_ml': cell['predrain_volume_ml'], 'fluid': 'waste_liquid'}]}
     return {'schema_version': 2, 'id': 'cell_startup_drain', 'description': 'Mandatory cell startup drain',
             'steps': [{'device': cell['valve_device'], 'operation': 'switch_route', 'route': route},
                       {'device': cell['drain_device'], 'operation': 'withdraw', 'volume_ml': cell['predrain_volume_ml'], 'fluid': 'waste_liquid'}]}

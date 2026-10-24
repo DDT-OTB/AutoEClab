@@ -1,4 +1,7 @@
 export const measurementStates={starting:'准备采集',running:'正在采集',completed:'已完成',stopped:'已停止',failed:'采集异常',imported:'已导入'};
+export function canDeleteMeasurement(user,record) {
+  return user?.role==='admin' && !!record?.version && ['completed','stopped','failed','imported'].includes(record.state);
+}
 export function chartData(points=[],kind='cv') {
   if(!Array.isArray(points))return [];
   return points.filter(point=>Array.isArray(point) && point.length>=4 && point.slice(0,4).every(Number.isFinite))

@@ -129,7 +129,10 @@ class ExecutionManager:
         now = datetime.now(timezone.utc)
         run_id = now.strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(6)
         snapshot = {'schema_version': 1, 'sequence': sequence, 'devices': devices, 'templates': templates, 'plan': plan,
-                    'operation': operation, 'target_run_id': target_run_id, 'safety_policy': load_policy()}
+                    'operation': operation, 'target_run_id': target_run_id, 'safety_policy': self.repository.safety_policy()}
+        from .topology import INLET
+        if self.repository.topology == INLET:
+            snapshot['fluidic_topology'] = INLET
         if any(step.get('action') == 'measurement' for step in plan['steps']):
             from copy import deepcopy
             snapshot['station'] = deepcopy(self.repository.station)
@@ -333,7 +336,7 @@ class ExecutionManager:
         if job['state'] != 'prepared' or job['version'] != expected_version:
             raise ApiError(409, '方案准备记录已变化，请重新准备。', 'version_conflict')
         snapshot = parse_json((folder / 'snapshot.json').read_bytes())
-        if version(snapshot) != expected_version or snapshot.get('safety_policy') != load_policy():
+        if version(snapshot) != expected_version or snapshot.get('safety_policy') != self.repository.safety_policy():
             raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
         if 'station' in snapshot and snapshot['station'] != self.repository.station:
             raise ApiError(409, '工作站配置已更新，请重新准备。', 'station_configuration_changed')
@@ -414,7 +417,7 @@ class ExecutionManager:
                 require_preflight(snapshot['sequence'], snapshot['safety_policy'])
             except ValueError as error:
                 raise ApiError(422, str(error), 'preflight_required') from error
-            if snapshot.get('safety_policy') != load_policy():
+            if snapshot.get('safety_policy') != self.repository.safety_policy():
                 raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
             if version(snapshot) != expected_version or version(self._templates()[1]) != job['templates_version']:
                 raise ApiError(409, '方案或设备模板已变化，请重新准备。', 'templates_changed')
@@ -513,7 +516,7 @@ class ExecutionManager:
                 raise ApiError(409, '准备内容发生变化，请重新检查方案。', 'version_conflict')
             if version(self._templates()[1]) != job['templates_version']:
                 raise ApiError(409, '设备模板已更新，请重新准备运行。', 'templates_changed')
-            if snapshot.get('safety_policy') != load_policy():
+            if snapshot.get('safety_policy') != self.repository.safety_policy():
                 raise ApiError(409, '安全规则已更新，请重新准备。', 'preparation_policy_changed')
             if 'station' in snapshot and snapshot['station'] != self.repository.station:
                 raise ApiError(409, '工作站配置已更新，请重新准备。', 'station_configuration_changed')

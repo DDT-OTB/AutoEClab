@@ -25,8 +25,8 @@ def measurement_templates(station=None):
         from .ec110 import RANGES
         template['device']['current_ranges_a'] = [value[0] for value in RANGES.values()]
         p = template['action']['default_parameters']
-        edge = min(.1, station['max_potential_v'])
-        p.update(upper_potential_v=edge, lower_potential_v=-edge, scan_rate_v_s=.03)
+        edge = min(p['upper_potential_v'], abs(p['lower_potential_v']), station['max_potential_v'])
+        p.update(upper_potential_v=edge, lower_potential_v=-edge)
     return {MEASUREMENT_DEVICE: template}
 
 
@@ -89,13 +89,16 @@ def validate_measurement(step):
     return validate_cv(step.get("parameters"))
 
 
-def compile_workflow(sequence, devices, templates, compiler, config, station=None):
+def compile_workflow(sequence, devices, templates, compiler, config, station=None, topology=None):
     sequence = flatten_sequence(sequence)
     config.keys(sequence, {"schema_version","id","description","steps","notes"},
                 {"schema_version","id","description","steps"}, "总流程")
     steps = sequence["steps"]
     if not isinstance(sequence["description"],str) or not isinstance(steps,list) or not steps:
         raise ValueError("流程描述须为文字，steps 至少包含一个动作。")
+    from .topology import topology_mode, INLET, compile_inlet_workflow
+    if topology_mode(topology) == INLET:
+        return compile_inlet_workflow(sequence, devices, templates, compiler, config, station)
     if not any(is_measurement(step) for step in steps):
         return config.compile_plan(devices,compiler.expand_sequence(sequence,templates))
     pump_steps, measurement_steps, ids = [], {}, set()
@@ -108,7 +111,7 @@ def compile_workflow(sequence, devices, templates, compiler, config, station=Non
         ids.add(name)
         if is_measurement(step):
             duration = validate_measurement(step)
-            description = step.get("description","Cyclic voltammetry measurement draft")
+            description = step.get("description","Cyclic voltammetry measurement" if station and station['enabled'] else "Cyclic voltammetry measurement draft")
             if not isinstance(description,str):
                 raise ValueError("测量动作 description 须为文字。")
             supported = bool(station and station['enabled'])

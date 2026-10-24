@@ -12,4 +12,5 @@ import './experiment-files.css';
 import './automation.css';
 import './workspace.css';
 import './preflight.css';
+import './measurements.css';
 createRoot(document.getElementById('root')).render(<AuthGate />);

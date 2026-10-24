@@ -51,6 +51,10 @@ class BlockLibrary:
         builtins = {block['id']: block for block in function_block_templates()}
         documents = {name: block for name, block in builtins.items() if name not in state['hidden']}
         documents.update(state['overrides'])
+        from .topology import INLET, migrate_block
+        if self.repository.topology == INLET:
+            documents = {name: migrated for name, block in documents.items()
+                         if (migrated := migrate_block(block)).get('steps')}
         return [{'id': name, 'block': deepcopy(block), 'version': self._version(block),
                  'source': 'custom' if name not in builtins else 'modified' if name in state['overrides'] else 'builtin',
                  'step_count': len(block['steps'])} for name, block in sorted(documents.items())]
@@ -86,18 +90,26 @@ class BlockLibrary:
             devices, templates = self.repository.compiler.load_templates(self.repository.templates_dir)
             # A reusable block may consume a route selected by a preceding block.
             # Supply routing context only to the validator; never store or execute it.
+            from .topology import INLET
+            inlet = self.repository.topology == INLET
             valves = set()
             for step in block['steps']:
                 template = templates.get(step['device'])
-                if template and template['action']['type'] == 'drain':
+                if template and template['action']['type'] == 'drain' and not inlet:
                     valves.add(template['action']['valve_device'])
             context = [{'device': name, 'operation': 'switch_route', 'route': next(iter(templates[name]['device']['routes']))}
                        for name in sorted(valves)]
+            if inlet:
+                syringe = next((step for step in block['steps'] if step['device'] == 'syringe_c'), None)
+                if syringe:
+                    context = [{'device': 'valve', 'operation': 'switch_route',
+                                'route': syringe.get('fluid', templates['syringe_c']['action']['fluid'])}]
             blocks = ([{'id': 'validation_context', 'description': 'Validation routing context', 'steps': context}] if context else [])
             blocks.append({**block, 'id': 'validation_template'})
             compile_workflow({'schema_version': 3, 'id': 'block_template_validation',
                               'description': 'Validate reusable block actions without execution', 'blocks': blocks},
-                             devices, templates, self.repository.compiler, self.repository.config)
+                             devices, templates, self.repository.compiler, self.repository.config,
+                             self.repository.station, self.repository.topology)
         except (ValueError, KeyError, TypeError, StopIteration) as error:
             raise ApiError(422, str(error), 'invalid_block_template') from error
         return deepcopy(document)

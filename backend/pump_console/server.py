@@ -130,7 +130,7 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     if path.startswith('/api/function-blocks/'):
                         return self.json_response(200, repository.block_library.get(path.removeprefix('/api/function-blocks/')))
                     if path == "/api/templates":
-                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(repository.station), "safety_policy": load_policy()})
+                        return self.json_response(200, {"templates": repository.templates(), "measurement_templates": measurement_templates(repository.station), "safety_policy": repository.safety_policy()})
                     if path == '/api/measurements' or path.startswith('/api/measurements/'):
                         return self.measurement_read(path)
                     if path == "/api/status":
@@ -382,17 +382,36 @@ def make_server(host, port, repository, static_root, auth, access=None):
                 auth.csrf(session, self.headers.get("X-CSRF-Token"))
                 path = unquote(urlsplit(self.path).path)
                 block_resource = path.startswith('/api/function-blocks/')
-                if not block_resource and not path.startswith("/api/experiments/"):
+                measurement_resource = path.startswith('/api/measurements/')
+                if not block_resource and not measurement_resource and not path.startswith("/api/experiments/"):
                     raise ApiError(405, "Deletion is not enabled for this resource", "method_not_allowed")
                 self.require_admin(session)
                 payload = self.body(8192)
                 if not isinstance(payload, dict) or set(payload) != {"expected_version"}:
                     raise ApiError(400, "Expected the current file version")
-                auth.session(token, touch=True)
-                name = path.removeprefix('/api/function-blocks/' if block_resource else '/api/experiments/')
-                result = repository.block_library.delete(name, payload['expected_version']) if block_resource else repository.delete_experiment(name, payload["expected_version"])
+                session = auth.session(token, touch=True)
+                self.require_admin(session)
+                name = path.removeprefix('/api/measurements/' if measurement_resource else '/api/function-blocks/' if block_resource else '/api/experiments/')
+                if measurement_resource:
+                    from .measurement_store import MeasurementBusyError, MeasurementConflictError
+                    if urlsplit(self.path).query:
+                        raise ApiError(400, 'Unexpected deletion query')
+                    try:
+                        with auth.db() as db:
+                            auth.audit(db, 'measurement_delete_requested/' + name, session['user']['username'], self.request_peer)
+                        result = repository.measurements.delete(name, payload['expected_version'], session['user']['username'])
+                    except MeasurementBusyError as error:
+                        raise ApiError(409, str(error), 'measurement_in_use') from error
+                    except MeasurementConflictError as error:
+                        raise ApiError(409, str(error), 'version_conflict') from error
+                    except FileNotFoundError:
+                        raise ApiError(404, '测量数据不存在。', 'not_found') from None
+                    except ValueError as error:
+                        raise ApiError(400, str(error), 'invalid_measurement_request') from error
+                else:
+                    result = repository.block_library.delete(name, payload['expected_version']) if block_resource else repository.delete_experiment(name, payload["expected_version"])
                 with auth.db() as db:
-                    auth.audit(db, ('function_block_deleted/' if block_resource else 'experiment_deleted/') + name, session["user"]["username"], self.request_peer)
+                    auth.audit(db, ('measurement_deleted/' if measurement_resource else 'function_block_deleted/' if block_resource else 'experiment_deleted/') + name, session["user"]["username"], self.request_peer)
                 self.json_response(200, result)
             except ApiError as error:
                 self.failure(error)
@@ -442,7 +461,7 @@ def main():
         if type(value) not in (int, float) or not minimum <= value <= maximum:
             raise ValueError("Invalid device status setting: " + key)
     repository = LabRepository(lab_root, root / "data", monitoring, device_status,
-                               config['hardware_execution_enabled'], config.get('automation'), config.get('electrochemical_station'))
+                               config['hardware_execution_enabled'], config.get('automation'), config.get('electrochemical_station'), config.get('fluidic_topology'))
     static_root = (args.config.parent / config["static_root"]).resolve()
     server = make_server(config["host"], args.port or config["port"], repository, static_root, auth, access)
     print(f"Pump Console ready: http://{config['host']}:{server.server_port}", flush=True)

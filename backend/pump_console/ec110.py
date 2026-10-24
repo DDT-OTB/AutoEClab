@@ -7,8 +7,8 @@ from pathlib import Path
 import struct
 import time
 
-DEFAULTS = dict(enabled=False, port='', baudrate=115200, max_potential_v=.1,
-                max_cycles=10, max_duration_s=3600, max_raw_bytes=268435456,
+DEFAULTS = dict(enabled=False, port='', baudrate=115200, max_potential_v=3.0,
+                max_cycles=499, max_duration_s=3600, max_raw_bytes=268435456,
                 dac_reference_mv=120.0, step_time_unit_ns=1000.0,
                 timing_verified=False, zero_i=0.0, cal_i=1.0, polarity_i=1,
                 cal_dac=1.0)
@@ -52,8 +52,10 @@ def encode_cv(parameters, profile):
     from .measurement import validate_cv
     p, profile = parameters, station_policy(profile)
     duration = validate_cv(p)
-    if p['cycles'] > profile['max_cycles'] or duration > profile['max_duration_s']:
-        raise ValueError('CV 圈数或预计时长超过当前工作站限制。')
+    if p['cycles'] > profile['max_cycles']:
+        raise ValueError('CV 圈数超过当前仪器扫描段数允许的完整循环数。')
+    if duration > profile['max_duration_s']:
+        raise ValueError('预计采集时长超过服务器当前任务时长上限。')
     def mv(key):
         value = p[key] * 1000
         if abs(p[key]) > profile['max_potential_v'] or not math.isclose(value, round(value), abs_tol=1e-8):
@@ -333,10 +335,12 @@ class EC110Session:
                     break
                 for row in rows:
                     voltage = row['potential_v']
-                    tolerance = max(.00015, row['dac_vref_mv'] / 1000 / 32767.5 * 3)
+                    quantum = row['dac_vref_mv'] / 1000 / 32767.5 * 3
+                    tolerance = max(.00015, quantum, max(abs(parameters['lower_potential_v']), abs(parameters['upper_potential_v'])) * .0015)
                     if voltage < parameters['lower_potential_v'] - tolerance or voltage > parameters['upper_potential_v'] + tolerance:
                         raise StationError('返回电位超出设定窗口，已请求停止。')
-                    if cursor < len(targets) and abs(voltage - targets[cursor]) <= tolerance:
+                    target_tolerance = max(.00015, quantum, abs(targets[cursor]) * .0015) if cursor < len(targets) else 0
+                    if cursor < len(targets) and abs(voltage - targets[cursor]) <= target_tolerance:
                         cursor += 1
                 writer.append(rows)
                 self.event('measurement_progress', device='electrochemical_station', measurement_id=writer.metadata['id'],

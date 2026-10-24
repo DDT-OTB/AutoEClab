@@ -54,11 +54,12 @@ function workflowBlocks(sequence) {
   return blocks;
 }
 
-export function workflowToEditor(sequence) {
+export function workflowToEditor(sequence,safetyPolicy) {
   let blocks=workflowBlocks(sequence);
   if(!blocks.some(isPreflight)) {const block=defaultPreflight();block.id=uniqueBlockId(block.id,blocks);blocks=[block,...blocks];}
   if(blocks.length>MAX_BLOCKS)throw new Error('包含前置准备后，功能块总数超过 128。');
-  const required=preflightErrors({schema_version:3,blocks});if(required.length)throw new Error(required[0]);
+  if(safetyPolicy)blocks=alignPreflight({blocks},safetyPolicy).blocks;
+  const required=preflightErrors({schema_version:3,blocks},safetyPolicy);if(required.length)throw new Error(required[0]);
   return {schema_version:3,id:sequence.id,description:sequence.description,notes:sequence.notes || ['Review this experiment before hardware execution.'],
     blocks:blocks.map(block=>({...structuredClone(block),_key:uiKey(),steps:block.steps.map(step=>({...structuredClone(step),_key:uiKey()}))}))};
 }
@@ -85,13 +86,13 @@ export function instantiateBlock(block,blocks) {
     steps:block.steps.map(step=>({...structuredClone(step),_key:uiKey()}))};
 }
 
-export function workflowErrors(sequence) {
+export function workflowErrors(sequence,safetyPolicy) {
   try {
     workflowBlocks(sequence);
-    const required=preflightErrors(sequence);if(required.length)return required;
+    const required=preflightErrors(sequence,safetyPolicy);if(required.length)return required;
     if(!sequence.blocks.some(block=>!isPreflight(block))) return ['请在前置准备之后添加至少一个实验功能块。'];
     sequence.blocks.forEach(block=>validateBlock(block));
     return [];
   } catch(error) {return [error.message];}
 }
-import {defaultPreflight,isPreflight,validatePreflight,preflightErrors} from './preflight.js';
+import {alignPreflight,defaultPreflight,isPreflight,validatePreflight,preflightErrors} from './preflight.js';

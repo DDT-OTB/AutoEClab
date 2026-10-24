@@ -66,9 +66,9 @@ export function BlockCanvas({blocks,selected,runningIndex,templates,shortNames,o
   </div>;
 }
 
-export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,cellBudget,offset,runningIndex,canManage,onSaveTemplate}) {
+export function BlockInspector({block,blockIndex,selectedStep,templates,names,shortNames,onBlockChange,onSelectAction,onUpdateAction,onMoveAction,onCopyAction,onDeleteAction,onAddAction,onExport,cellBudget,offset,runningIndex,canManage,onSaveTemplate,safetyPolicy}) {
   if(!block) return <div className="inspector-empty"><Boxes size={30}/><h3>选择一个功能块</h3><p>实验由多个功能块顺序组成。<br/>在这里编辑块内动作与参数。</p></div>;
-  if(isPreflight(block))return <div className="block-editor"><div className="block-editor-heading"><h3>前置准备 · 必需</h3><p>{block.id}</p></div><PreflightEditor block={block} onChange={onBlockChange}/>{canManage && <button className="block-save-template" onClick={onSaveTemplate}><Save size={13}/>保存到功能块库</button>}<button className="block-export" onClick={onExport}><Download size={13}/>导出功能块 JSON</button></div>;
+  if(isPreflight(block))return <div className="block-editor"><div className="block-editor-heading"><h3>前置准备 · 必需</h3><p>{block.id}</p></div><PreflightEditor block={block} onChange={onBlockChange} safetyPolicy={safetyPolicy}/>{canManage && <button className="block-save-template" onClick={onSaveTemplate}><Save size={13}/>保存到功能块库</button>}<button className="block-export" onClick={onExport}><Download size={13}/>导出功能块 JSON</button></div>;
   if(selectedStep) return <div className="block-action-detail">
     <button className="block-back" onClick={()=>onSelectAction(null)}><ChevronLeft size={14}/>返回 {block.id} 的动作列表</button>
     <ActionInspector key={selectedStep._key} step={selectedStep} template={templates[selectedStep.device]} index={offset+block.steps.findIndex(step=>step._key===selectedStep._key)} title={names[selectedStep.device] || selectedStep.device} onChange={onUpdateAction}/>

@@ -4,17 +4,18 @@ import { ActionIcon } from './FlowStep.jsx';
 import { formatDuration, operationLabels } from './model.js';
 import { progressPercent } from './monitor.js';
 import { deviceQuickInfo, equipmentStatusSource, equipmentSummary, hardwareReason } from './equipment.js';
+import StationMeasurements from './StationMeasurements.jsx';
 
 const timeText=value=>value ? new Date(value).toLocaleString('zh-CN', {
   month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',
 }) : '暂无记录';
-const routeName=route=>({waste_1:'废液 1',waste_2:'废液 2'}[route] || route);
+const routeName=route=>({water:'水 · 通道 5',electrolyte:'电解液 · 通道 6',waste:'废液瓶',waste_1:'废液 1',waste_2:'废液 2'}[route] || route);
 
 export function EquipmentState({ activity }) {
   return <span className={'equipment-state state-'+activity.state}><i/>{activity.label}</span>;
 }
 
-function DeviceDetails({ item, fresh }) {
+function DeviceDetails({ item, fresh,measurement,onOpenMeasurement }) {
   const { config, device, activity }=item;
   const hardware=device?.hardware;
   const currentHardware=fresh && hardware && !hardware.stale && activity.source==='hardware';
@@ -26,7 +27,7 @@ function DeviceDetails({ item, fresh }) {
       <div><h4>{item.name}</h4><code>{item.id}</code></div>
     </div>
     <div className="device-detail-state"><EquipmentState activity={activity}/><span>{equipmentStatusSource(item,fresh)}</span></div>
-    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数可在“实验方案”中设置。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : config.kind==='electrochemical'?<div className="station-reserved-note"><Radio size={21}/><strong>EC110 · 循环伏安法</strong><p>{programActivity?'工作站正在按本次参数快照执行。测量曲线显示在实验运行页，采集数据自动归档。':'在实验方案中添加 CV 动作，运行时由后端验证身份并采集数据。'}</p><span>{activity.point_count!==undefined?activity.point_count.toLocaleString()+' 个已采集数据点':device?.port_present?'串口节点存在，运行时校验仪器':'请检查工作站串口连接'}</span></div>:<>
+    {item.virtual ? <div className="station-reserved-note"><Radio size={21}/><strong>测量接口尚未接入</strong><p>循环伏安法（CV）的参数可在“实验方案”中设置。工作站通讯接入后，这里将显示测量状态、电位与电流。</p><span>当前暂无实时测量数据</span></div> : config.kind==='electrochemical'?<StationMeasurements measurement={measurement} fresh={fresh} onOpen={onOpenMeasurement}/>:<>
       {programActivity ? <section className="equipment-current-action" aria-label="本次程序动作">
         <div className="detail-section-title"><span>本次程序动作</span><strong>{operationLabels[activity.operation] || activity.label}</strong></div>
         <div className="current-action-target">{typeof activity.volume_ml==='number' ? <><strong>{activity.volume_ml}</strong><span>mL · 目标体积</span></> : <strong>{routeName(activity.route) || '设备动作'}</strong>}</div>
@@ -37,7 +38,7 @@ function DeviceDetails({ item, fresh }) {
         </>}
       </section> : <div className="equipment-current-note"><CircleHelp size={15}/><p>{activity.state==='busy' ? '设备最近返回工作中；当前没有关联的程序动作，暂无法确定目标体积与进度。' : !fresh ? '状态连接已中断，等待重新获取数据。' : hardware?.stale ? '最近的设备读数已过期，可点击刷新重新读取。' : '当前没有正在执行的程序动作。'}</p></div>}
       {currentHardware && ['idle','busy','not_ready'].includes(hardware.state) && <dl className="equipment-readings">
-        {hardware.channel!==undefined && <><dt>设备返回通道</dt><dd>{hardware.channel}{[5,6].includes(hardware.channel)?' · 废液 '+(hardware.channel===5?'1':'2'):''}</dd></>}
+        {hardware.channel!==undefined && <><dt>设备返回通道</dt><dd>{hardware.channel}{config.routes?.water?[5,6].includes(hardware.channel)?' · '+(hardware.channel===5?'水':'电解液'):' · 未配置入口':[5,6].includes(hardware.channel)?' · 废液 '+(hardware.channel===5?'1':'2'):''}</dd></>}
         {hardware.position_steps!==undefined && <><dt>活塞位置</dt><dd>{hardware.position_steps} 步</dd></>}
         {hardware.valve_position && <><dt>注射泵阀位</dt><dd>{hardware.valve_position.toLowerCase()==='i'?'I · 吸入口':hardware.valve_position.toLowerCase()==='o'?'O · 注出口':hardware.valve_position}</dd></>}
       </dl>}
@@ -54,7 +55,7 @@ function DeviceDetails({ item, fresh }) {
   </div>;
 }
 
-export default function EquipmentMonitor({ items, selectedItem, fresh, onSelect, onRefresh, refreshing, role }) {
+export default function EquipmentMonitor({ items, selectedItem, fresh, onSelect, onRefresh, refreshing, role,measurement,onOpenMeasurement }) {
   const summary=equipmentSummary(items);
   return <section className="equipment-monitor-panel" aria-label="实时设备状态监测">
     <header className="equipment-panel-heading"><div><span className="equipment-eyebrow">LIVE MONITOR</span><h3>{selectedItem?'设备状态详情':'设备状态监测'}</h3></div>
@@ -62,7 +63,7 @@ export default function EquipmentMonitor({ items, selectedItem, fresh, onSelect,
     </header>
     {selectedItem ? <>
       <button className="equipment-back-button" type="button" onClick={()=>onSelect(null)}><ArrowLeft size={14}/>全部设备<span>{summary.total} 台设备 · {summary.reserved} 个预留</span></button>
-      <DeviceDetails item={selectedItem} fresh={fresh}/>
+      <DeviceDetails item={selectedItem} fresh={fresh} measurement={measurement} onOpenMeasurement={onOpenMeasurement}/>
     </> : <>
       <div className="equipment-monitor-summary" aria-label="设备状态汇总">
         {[['working','工作中'],['idle','空闲 / 完成'],['attention','需关注'],['unknown','待确认']].map(([key,label])=><div className={'monitor-count count-'+key} key={key}><strong>{summary[key]}</strong><span>{label}</span></div>)}

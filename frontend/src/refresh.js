@@ -1,7 +1,7 @@
 export async function refreshAllStatus(api, readHardware) {
   if (readHardware) return api.refreshStatus();
   const [health, status, recent, items] = await Promise.all([api.health(), api.status(), api.runs(), api.templates()]);
-  return { health, status, templates: items.templates, measurement_templates: items.measurement_templates || {}, runs: recent.runs, scan: { state: 'display_only' } };
+  return { health, status, templates: items.templates, measurement_templates: items.measurement_templates || {}, safety_policy:items.safety_policy, runs: recent.runs, scan: { state: 'display_only' } };
 }
 
 export function refreshMessage(scan, devices) {

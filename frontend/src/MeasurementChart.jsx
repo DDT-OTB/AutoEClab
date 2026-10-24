@@ -1,7 +1,6 @@
 import React,{useMemo,useRef,useState} from 'react';
 import {Activity,Download,LineChart} from 'lucide-react';
 import {chartData,chartDomain,downloadBlob,measurementStates,numberText} from './measurements.js';
-import './measurements.css';
 
 function tick(value) {
   if(value!==0 && (Math.abs(value)<.001 || Math.abs(value)>=10000))return value.toExponential(1);

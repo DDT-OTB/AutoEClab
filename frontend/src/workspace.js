@@ -10,8 +10,8 @@ export function workspacePage(hash='') {
   const value=hash.replace(/^#/,'');
   return Object.hasOwn(workspacePages,value)?value:'run';
 }
-export function runSnapshot(sequence) {
+export function runSnapshot(sequence,safetyPolicy) {
   if(typeof sequence?.id!=='string' || typeof sequence?.description!=='string') throw new Error('实验方案需要文字类型的 id 和 description。');
-  return workflowSequence(workflowToEditor(sequence));
+  return workflowSequence(workflowToEditor(sequence,safetyPolicy));
 }
 export const emptyRunSequence={schema_version:3,id:'no_experiment_selected',description:'No experiment selected',notes:[],blocks:[]};

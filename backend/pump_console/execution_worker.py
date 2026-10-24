@@ -31,7 +31,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     operation = snapshot.get('operation', 'sequence')
     if operation not in ('sequence', 'calibrate_syringe', 'drain_cell'):
         raise ValueError('Unsupported controller operation')
-    if snapshot.get('safety_policy') != load_policy():
+    if snapshot.get('safety_policy') != load_policy(snapshot.get('fluidic_topology')):
         raise ValueError('Safety policy changed; prepare the experiment again')
     if operation == 'sequence':
         require_preflight(snapshot['sequence'], snapshot['safety_policy'])
@@ -41,7 +41,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     if operation == 'drain_cell':
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Drain requires explicit discharge confirmation')
-        route = snapshot['sequence']['steps'][0]['route']
+        route = snapshot['sequence']['steps'][0].get('route', 'waste')
         if snapshot['sequence'] != drain_sequence(snapshot['safety_policy'], route):
             raise ValueError('Startup drain does not match the server safety policy')
     if operation == 'sequence' and any(step['device'] == 'syringe_c' for step in snapshot['plan']['steps']) and not job.get('calibration_consumed_at'):
@@ -50,7 +50,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
         if job.get('discharge_confirmed') is not True or job.get('target_run_id') != snapshot.get('target_run_id'):
             raise ValueError('Explicit discharge confirmation is required for calibration')
         config.validate_devices(snapshot['devices'])
-    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'))
+    plan = initialization_plan(snapshot['devices']) if operation == 'calibrate_syringe' else compile_workflow(snapshot['sequence'], snapshot['devices'], snapshot['templates'], compiler, config, snapshot.get('station'), snapshot.get('fluidic_topology'))
     if plan != snapshot['plan'] or plan['unresolved'] or not plan['ready_for_hardware']:
         raise ValueError('Prepared plan did not pass controller validation')
     logs = root / 'logs/automation'
@@ -70,7 +70,7 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
     def event(kind, **fields):
         nonlocal cleanup_failed, serial_requests, completed_step_count, active_plan_step
         if operation == 'sequence' and kind == 'step_started':
-            if load_policy() != snapshot['safety_policy']:
+            if load_policy(snapshot.get('fluidic_topology')) != snapshot['safety_policy']:
                 raise ValueError('Cell safety policy changed during execution')
             if active_plan_step is not None or completed_step_count >= len(plan['steps']) or fields.get('step') != plan['steps'][completed_step_count]:
                 raise ValueError('Controller step does not match the validated sequence')
@@ -111,11 +111,11 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
                             'run_id': run_id, 'source': 'experiment_calibration', 'target_run_id': snapshot['target_run_id']})
                         publish(initialization_verified=True)
                     else:
-                        if any(step['action'] == 'measurement' for step in plan['steps']):
-                            if operation != 'sequence' or runner_factory is not None:
+                        if any(step['action'] == 'measurement' for step in plan['steps']) or snapshot.get('fluidic_topology') == 'syringe_inlet_selector':
+                            if (operation != 'sequence' and any(step['action'] == 'measurement' for step in plan['steps'])) or runner_factory is not None:
                                 raise ValueError('Mixed CV execution requires the fixed workstation adapter')
                             from .mixed_runner import run_mixed
-                            run_mixed(snapshot['devices']['devices'], plan, event, controller, snapshot['station'],
+                            run_mixed(snapshot['devices']['devices'], plan, event, controller, snapshot.get('station'),
                                       Path(run_directory).resolve().parent, run_id, job['started_by'])
                         else:
                             factory = runner_factory or controller.Runner

@@ -15,23 +15,22 @@ import BlockLibraryManager from './BlockLibraryManager.jsx';
 import WorkspaceNav,{PlanWorkspaceTabs} from './WorkspaceNav.jsx';
 import RunWorkspace from './RunWorkspace.jsx';
 import {emptyRunSequence,runSnapshot,workspacePage,workspacePages} from './workspace.js';
-import {isPreflight} from './preflight.js';
+import {alignPreflight,isPreflight} from './preflight.js';
 import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock} from './workflow.js';
 import { isMeasurement } from './cv.js';
 import EquipmentOverview from './EquipmentOverview.jsx';
 import AccountManagement from './AccountManagement.jsx';
 import ExperimentManager from './ExperimentManager.jsx';
 import DataManagement from './DataManagement.jsx';
-import MeasurementCharts from './MeasurementChart.jsx';
 import AutomationControl from './AutomationControl.jsx';
 import { sequenceKey } from './automation.js';
-import { cellVolumes } from './cellSafety.js';
+import { cellVolumes,defaultSafetyPolicy } from './cellSafety.js';
 import { editorAfterFileChange, uniqueExperimentId } from './experiments.js';
 
-const emptyDraft = () => workflowToEditor({
+const emptyDraft = safetyPolicy => workflowToEditor({
   schema_version: 3, id: 'new_experiment', description: 'New block experiment',
   notes: ['Review this experiment before hardware execution.'], blocks: [],
-});
+},safetyPolicy);
 const names = {
   peristaltic_1: '泵 1 · 超纯水', peristaltic_2: '泵 2 · 排液', peristaltic_3: '泵 3 · 硫酸',
   syringe_c: '注射泵 · 电解液', valve: '切换阀',
@@ -55,6 +54,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const actionTemplates = useMemo(() => ({ ...templates, ...measurementTemplates }), [templates, measurementTemplates]);
   const { status, accept: acceptStatus, streaming, fresh } = useLiveStatus(api);
   const [health, setHealth] = useState(null);
+  const [safetyPolicy,setSafetyPolicy]=useState(defaultSafetyPolicy);
   const [catalog, setCatalog] = useState([]);
   const catalogRequest = useRef(0);
   const [runs, setRuns] = useState([]);
@@ -89,11 +89,11 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const sequence = useMemo(() => toSequence(draft), [draft]);
   const executionSequence=runSequence || emptyRunSequence;
   const flatRun=useMemo(()=>flattenSequence(executionSequence),[executionSequence]);
-  const runErrors=useMemo(()=>runSequence?draftErrors(runSequence,actionTemplates):['请先加载或导入一个实验流程。'],[runSequence,actionTemplates]);
+  const runErrors=useMemo(()=>runSequence?draftErrors(runSequence,actionTemplates,safetyPolicy):['请先加载或导入一个实验流程。'],[runSequence,actionTemplates,safetyPolicy]);
   const runMeasurementCount=flatRun.steps.filter(isMeasurement).length;
   const steps=useMemo(()=>draft.blocks.filter(block=>!isPreflight(block)).flatMap(block=>block.steps),[draft.blocks]);
-  const cellBudget=useMemo(()=>cellVolumes(sequence,undefined,actionTemplates),[sequence,actionTemplates]);
-  const errors = useMemo(() => draftErrors(draft, actionTemplates), [draft, actionTemplates]);
+  const cellBudget=useMemo(()=>cellVolumes(sequence,safetyPolicy,actionTemplates),[sequence,actionTemplates,safetyPolicy]);
+  const errors = useMemo(() => draftErrors(draft, actionTemplates,safetyPolicy), [draft, actionTemplates,safetyPolicy]);
   const jsonText = useMemo(() => JSON.stringify(sequence, null, 2), [sequence]);
   const latestJson = useRef(jsonText);
   latestJson.current = jsonText;
@@ -134,6 +134,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       if (JSON.stringify(data.templates) !== JSON.stringify(templates) || JSON.stringify(data.measurement_templates) !== JSON.stringify(measurementTemplates)) {setPlan(null);setRunPlan(null);}
       setTemplates(data.templates);
       setMeasurementTemplates(data.measurement_templates || {});
+      if(data.safety_policy){setSafetyPolicy(data.safety_policy);setDraft(current=>alignPreflight(current,data.safety_policy));}
       setConnected(true); setLatency(Math.round(performance.now() - started));
       setError(current => current.startsWith('状态刷新失败：') || current.startsWith('后端连接失败：') ? '' : current);
       if (data.scan.state === 'failed') setError('状态刷新失败：硬件读取未完成，请重试。');
@@ -146,7 +147,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     setBusy('load'); setError('');
     try {
       const data = await api.experiment(id);
-      const value = workflowToEditor(data.sequence);
+      const value = workflowToEditor(data.sequence,safetyPolicy);
       setDraft(value); setBase({ id, version: data.version });
       const migrated=data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight);
       setDirty(migrated);if(migrated)setNotice('已补入必需的前置准备功能块，请检查流路后保存方案。');
@@ -173,19 +174,19 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     setBusy('load-run');setError('');
     try {
       const data=await api.experiment(id);
-      setRunSequence(runSnapshot(data.sequence));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
+      setRunSequence(runSnapshot(data.sequence,safetyPolicy));setRunSource({kind:'file',id,version:data.version,migrated:data.sequence.schema_version===2 || !data.sequence.blocks?.some(isPreflight),label:'方案文件：'+data.filename});setRunPlan(null);navigate('run');
     }catch(failure){setError(failure.message);}
     finally{setBusy('');}
   }
   function useDesignForRun() {
     if(errors.length){setError(errors[0]);return;}
-    setRunSequence(runSnapshot(sequence));setRunSource({kind:'draft',id:null,label:'来自流程编辑：'+draft.id+(dirty?'（未保存草稿）':'')});setRunPlan(null);navigate('run');
+    setRunSequence(runSnapshot(sequence,safetyPolicy));setRunSource({kind:'draft',id:null,label:'来自流程编辑：'+draft.id+(dirty?'（未保存草稿）':'')});setRunPlan(null);navigate('run');
   }
   function editLoadedRun() {
     if(!runSequence)return;
     if(sequenceKey(sequence)!==sequenceKey(runSequence)) {
       if(dirty && !window.confirm('载入此流程进行编辑会替换当前未保存的设计草稿，是否继续？'))return;
-      const value=workflowToEditor(runSequence);
+      const value=workflowToEditor(runSequence,safetyPolicy);
       setDraft(value);setBase({id:runSource?.id || null,version:runSource?.version || null});setDirty(runSource?.kind!=='file' || runSource?.migrated===true);
       setSelectedBlock(value.blocks[0]?._key || null);setSelected(null);setPlan(null);
     }
@@ -205,6 +206,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
         const [items, ,library] = await Promise.all([api.templates(), reloadCatalog(),api.functionBlocks()]);
         setBlockTemplates(library.blocks);
         setTemplates(items.templates); setMeasurementTemplates(items.measurement_templates || {});
+        if(items.safety_policy){setSafetyPolicy(items.safety_policy);setDraft(current=>alignPreflight(current,items.safety_policy));}
         await refresh();
       } catch (failure) { setError(failure.message); }
     })();
@@ -334,7 +336,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   }
   function createNew() {
     if (dirty && !window.confirm('新建方案会放弃尚未保存的修改，是否继续？')) return false;
-    setDraft({...emptyDraft(),id:uniqueExperimentId('new_experiment',catalog)}); setBase({ id: null, version: null }); setDirty(true);
+    setDraft({...emptyDraft(safetyPolicy),id:uniqueExperimentId('new_experiment',catalog)}); setBase({ id: null, version: null }); setDirty(true);
     setPlan(null); setSelected(null);setSelectedBlock(null); setError('');
     setRightTab('parameters');setPlanView('editor');navigate('plans');setModal(null);return true;
   }
@@ -351,9 +353,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       if(new TextEncoder().encode(importText).length>262144) throw new Error('导入文件不能超过 256 KB。');
       const value = JSON.parse(importText);
       if(modal==='import-block') {addBlock(importBlock(value));setModal(null);setError('');setNotice('已导入功能块；参数仍需校验与保存。');return;}
-      if(modal==='import-run') {setRunSequence(runSnapshot(value));setRunSource({kind:'import',id:null,label:'从 JSON 导入的流程'});setRunPlan(null);setModal(null);setError('');navigate('run');return;}
+      if(modal==='import-run') {setRunSequence(runSnapshot(value,safetyPolicy));setRunSource({kind:'import',id:null,label:'从 JSON 导入的流程'});setRunPlan(null);setModal(null);setError('');navigate('run');return;}
       if(dirty && !window.confirm('导入方案会替换尚未保存的编排内容，是否继续？')) return;
-      const editor = workflowToEditor(value);
+      const editor = workflowToEditor(value,safetyPolicy);
       setDraft(editor); setBase({ id: null, version: null }); setDirty(true);
       setPlan(null);setSelectedBlock(editor.blocks[0]?._key || null); setSelected(null); setModal(null); setError('');
       setRightTab('parameters');setPlanView('editor');navigate('plans');
@@ -381,11 +383,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
         {activeNav==='run' && <RunWorkspace sequence={runSequence} preparation={runPreparation && sequenceKey(runPreparation.sequence)===sequenceKey(executionSequence)?runPreparation:null} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
         <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onProgress={setRunPreparation} onRestore={value=>{setRunSequence(structuredClone(value.sequence));setRunSource({kind:'restored',id:null,label:'恢复的前置流程'});setRunPlan(value.preview);}} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
         {activeNav==='run' && <><LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names}/>
-          {status.measurement?.metadata && <MeasurementCharts metadata={status.measurement.metadata} points={status.measurement.points} live={['starting','running'].includes(status.measurement.metadata.state)} fresh={fresh} onOpen={id=>{setSelectedDataset(id);navigate('data');}}/>}
-          {!status.measurement && runMeasurementCount>0 && <div className="measurement-live-empty">CV 开始后，电位—电流与时间—电流曲线会在这里实时显示，采集数据会自动保存。</div>}
-          <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role}/>
+          <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role} onOpenMeasurement={id=>{setSelectedDataset(id);navigate('data');}}/>
         </>}
-        {activeNav==='data' && <DataManagement selectedId={selectedDataset} onSelect={setSelectedDataset} liveMeasurement={status.measurement}/>}
+        {activeNav==='data' && <DataManagement user={user} selectedId={selectedDataset} onSelect={setSelectedDataset} liveMeasurement={status.measurement}/>}
         {activeNav==='plans' && <section className="plans-workspace" aria-label="实验方案工作区">
           <PlanWorkspaceTabs view={planView} onChange={setPlanView} dirty={dirty}/>
           <div id="plan-workspace-panel" role="tabpanel" aria-label={planView==='files'?'方案文件管理':'实验流程编辑'}>
@@ -415,7 +415,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
                   canManage={user?.role==='admin'} onSaveTemplate={()=>openBlockLibrary(activeBlock)}
                   onBlockChange={updateBlock} onSelectAction={selectAction} onUpdateAction={values=>updateStep(selectedStep._key,values)} onMoveAction={reorder} onCopyAction={copyAction} onDeleteAction={deleteAction}
                   onAddAction={showActions} onExport={downloadBlock}
-                  cellBudget={cellBudget} offset={blockOffset} runningIndex={-1}/> :
+                  safetyPolicy={safetyPolicy} cellBudget={cellBudget} offset={blockOffset} runningIndex={-1}/> :
                  rightTab==='json' ? <div className="json-panel"><div className="json-caption"><span>schema_version: 3</span><button onClick={async () => { try { await navigator.clipboard.writeText(jsonText); setNotice('JSON 已复制。'); } catch { setError('复制失败，请使用下载 JSON。'); } }} aria-label="复制 JSON"><Clipboard size={14} /></button></div><pre>{jsonText}</pre></div> : <div className="workflow-summary">
                   <div className="summary-head"><span className="summary-icon"><FlaskConical size={22} /></span><h3>当前实验方案</h3><p>{draft.blocks.length} 个功能块 · {steps.length} 个动作{measurementCount ? ' · '+measurementCount+' 个测量动作' : ''}</p></div>
                   <div className="summary-metrics"><div><span>目标注入</span><strong>{totals.inject.toLocaleString()}<small>mL</small></strong></div><div><span>标称抽出</span><strong>{totals.withdraw.toLocaleString()}<small>mL</small></strong></div></div>
@@ -440,7 +440,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       </div>
     </main>
     {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
-    {modal==='block-library' && <BlockLibraryManager user={user} seed={libraryOpen.seed} initialId={libraryOpen.id} templates={actionTemplates} names={names} shortNames={shortNames} defaultVolume={health?.ui.default_volume_ml ?? 1} onChanged={library=>setBlockTemplates(library.blocks)} onClose={()=>setModal(null)}/>}
+    {modal==='block-library' && <BlockLibraryManager safetyPolicy={safetyPolicy} user={user} seed={libraryOpen.seed} initialId={libraryOpen.id} templates={actionTemplates} names={names} shortNames={shortNames} defaultVolume={health?.ui.default_volume_ml ?? 1} onChanged={library=>setBlockTemplates(library.blocks)} onClose={()=>setModal(null)}/>}
     {modal && modal!=='block-library' && <div className="modal-backdrop" onMouseDown={() => setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-label="详情面板" onMouseDown={event => event.stopPropagation()}><div className="modal-header"><h2>{modal === 'accounts' ? '账号管理' : modal === 'import-run' ? '导入运行流程' : modal === 'import-block' ? '导入功能块 JSON' : modal === 'import' ? '导入实验 JSON' : modal === 'connection' ? '前后端连接' : '运行记录详情'}</h2><button className="icon-button" onClick={() => setModal(null)} aria-label="关闭面板"><X size={19} /></button></div>
       {['import','import-block','import-run'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':modal==='import-run'?'载入本次待运行的完整流程，不会替换实验设计草稿。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':modal==='import-run'?'载入运行流程':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :

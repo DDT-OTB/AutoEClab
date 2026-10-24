@@ -4,9 +4,10 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from pump_console.measurement_store import MeasurementStore, thin_points
+from pump_console.measurement_store import MeasurementStore, MeasurementBusyError, MeasurementConflictError, thin_points
 import test_api
 
 
@@ -77,6 +78,59 @@ class DatasetTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.store.points(writer.metadata['id'], 10001)
         with self.assertRaises(ValueError): self.store.list(limit=0)
 
+    def test_delete_archives_files_and_keeps_points_and_auditable_metadata(self):
+        writer = self.writer(); writer.append(synthetic_rows()); writer.finish('completed', stop_confirmed=True)
+        item = self.store.get(writer.metadata['id'])
+        original = (writer.folder / 'points.csv').read_bytes()
+        result = self.store.delete(item['id'], item['version'], 'synthetic_admin')
+        archive = self.store.root / 'trash' / result['trash_id']
+        self.assertEqual((archive / item['id'] / 'points.csv').read_bytes(), original)
+        audit = json.loads((archive / 'deletion.json').read_text())
+        self.assertEqual(audit['deleted_by'], 'synthetic_admin')
+        self.assertEqual(audit['version'], item['version'])
+        self.assertEqual(self.store.list()['total'], 0); self.assertIsNone(self.store.latest())
+        for function, args in [(self.store.get, (item['id'],)), (self.store.points, (item['id'],)), (self.store.download, (item['id'], 'csv'))]:
+            with self.assertRaises(FileNotFoundError): function(*args)
+        with self.store.db() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM points WHERE dataset_id=?', (item['id'],)).fetchone()[0], 100)
+        again = self.store.delete(item['id'], item['version'], 'synthetic_admin')
+        self.assertTrue(again['already_deleted']); self.assertEqual(again['trash_id'], result['trash_id'])
+        self.assertEqual(os.stat(archive).st_mode & 0o777, 0o700)
+
+    def test_active_or_finalizing_writer_cannot_be_deleted(self):
+        writer = self.writer(); item = self.store.get(writer.metadata['id'])
+        with self.assertRaises(MeasurementBusyError): self.store.delete(item['id'], item['version'], 'admin')
+        writer.publish(force=True, state='completed')
+        item = self.store.get(item['id'])
+        with self.assertRaises(MeasurementBusyError): self.store.delete(item['id'], item['version'], 'admin')
+        self.assertTrue(writer.folder.exists())
+
+    def test_stale_version_or_unknown_path_never_deletes_data(self):
+        writer = self.writer(); writer.finish('failed')
+        with self.assertRaises(MeasurementConflictError): self.store.delete(writer.metadata['id'], '0' * 64, 'admin')
+        with self.assertRaises(ValueError): self.store.delete('../index.sqlite3', '0' * 64, 'admin')
+        self.assertTrue(writer.folder.exists()); self.assertEqual(self.store.list()['total'], 1)
+
+    def test_failed_archive_move_rolls_back_record_and_preserves_files(self):
+        writer = self.writer(); writer.append(synthetic_rows()); writer.finish('completed')
+        item = self.store.get(writer.metadata['id']); original = os.replace
+        def fail_folder(source, target):
+            if Path(source) == writer.folder: raise OSError('synthetic archive failure')
+            return original(source, target)
+        with patch('pump_console.measurement_store.os.replace', side_effect=fail_folder), self.assertRaises(OSError):
+            self.store.delete(item['id'], item['version'], 'admin')
+        self.assertEqual(self.store.get(item['id'])['version'], item['version'])
+        self.assertTrue((writer.folder / 'points.csv').exists())
+        self.assertEqual(list((self.store.root / 'trash').iterdir()), [])
+
+    def test_upgrade_keeps_legacy_dataset_table_shape_and_data(self):
+        writer = self.writer(); writer.append(synthetic_rows()); writer.finish('completed')
+        with self.store.db() as db: db.execute('DROP TABLE measurement_deletions')
+        upgraded = MeasurementStore(self.tmp.name)
+        with upgraded.db() as db:
+            self.assertEqual(len(list(db.execute('PRAGMA table_info(datasets)'))), 7)
+        self.assertEqual(upgraded.get(writer.metadata['id'])['point_count'], 100)
+
 
 class MeasurementDataApiTests(unittest.TestCase):
     setUpBase = test_api.ApiTests.setUp
@@ -120,6 +174,36 @@ class MeasurementDataApiTests(unittest.TestCase):
         self.assertEqual(status['measurement']['metadata']['id'], self.dataset)
         self.assertEqual(status['measurement']['metadata']['point_count'], 100)
         self.assertFalse(status['hardware_execution_enabled'])
+
+    def test_admin_delete_requires_version_and_removes_every_read_route(self):
+        item = self.repo.measurements.get(self.dataset)
+        code, result = self.request('DELETE', '/api/measurements/' + self.dataset, {'expected_version': item['version']})
+        self.assertEqual(code, 200); self.assertTrue(result['deleted'])
+        self.assertEqual(self.request('GET', '/api/measurements')[1]['total'], 0)
+        for suffix in ('', '/points', '/download?format=csv', '/download?format=raw'):
+            self.assertEqual(self.request('GET', '/api/measurements/' + self.dataset + suffix)[0], 404)
+        with self.auth.db() as db:
+            self.assertTrue(db.execute('SELECT 1 FROM audit WHERE event=? AND username=?',
+                                      ('measurement_deleted/' + self.dataset, 'test_admin')).fetchone())
+
+    def test_delete_rejects_anonymous_viewer_missing_csrf_and_arbitrary_fields(self):
+        item = self.repo.measurements.get(self.dataset); body = {'expected_version': item['version']}
+        self.assertEqual(self.request('DELETE', '/api/measurements/' + self.dataset, body, headers={'Cookie': ''})[0], 401)
+        self.assertEqual(self.request('DELETE', '/api/measurements/' + self.dataset, body, headers={'X-CSRF-Token': ''})[0], 403)
+        self.assertEqual(self.request('DELETE', '/api/measurements/' + self.dataset, {**body, 'force': True})[0], 400)
+        self.auth.create_user('delete_viewer', 'Synthetic viewer password 2026', role='viewer', temporary=False)
+        self.token, session = self.auth.login('delete_viewer', 'Synthetic viewer password 2026', '127.0.0.1'); self.csrf = session['csrf_token']
+        self.assertEqual(self.request('DELETE', '/api/measurements/' + self.dataset, body)[0], 403)
+        self.assertTrue(self.repo.measurements.get(self.dataset))
+
+    def test_stale_delete_version_and_live_acquisition_return_conflict(self):
+        self.assertEqual(self.request('DELETE', '/api/measurements/' + self.dataset, {'expected_version': '0' * 64})[0], 409)
+        writer = self.repo.measurements.create('live-run', 'live', synthetic_step(), 'test_admin', {})
+        try:
+            item = self.repo.measurements.get(writer.metadata['id'])
+            code, result = self.request('DELETE', '/api/measurements/' + item['id'], {'expected_version': item['version']})
+            self.assertEqual(code, 409); self.assertEqual(result['error'], 'measurement_in_use')
+        finally: writer.finish('failed')
 
 
 if __name__ == '__main__': unittest.main()

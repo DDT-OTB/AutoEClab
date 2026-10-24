@@ -64,7 +64,7 @@ export function stepSummary(step, template) {
       Number.isInteger(p.cycles) ? p.cycles + ' 圈' : '圈数待设置'].join(' · ');
   }
   if (template?.device.kind === 'valve')
-    return (step.route === 'waste_1' ? '废液 1' : step.route === 'waste_2' ? '废液 2' : step.route || '流路待选择') +
+    return ({water:'水',electrolyte:'电解液',waste:'废液瓶',waste_1:'废液 1',waste_2:'废液 2'}[step.route] || step.route || '流路待选择') +
       ' · 通道 ' + (template.device.routes[step.route] ?? '?');
   return (step.volume_ml === '' || step.volume_ml === undefined ? '体积待填写' : step.volume_ml + ' mL') +
     (template?.device.rpm ? ' · ' + template.device.rpm + ' rpm' :
