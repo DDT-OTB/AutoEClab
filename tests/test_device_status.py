@@ -9,6 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from unittest.mock import patch
 import test_api
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -105,6 +106,27 @@ class ReadOnlyQueryTests(unittest.TestCase):
         result = query_device("other", {"kind":"unknown"}, factory)
         self.assertEqual(result["state"], "unsupported")
         factory.assert_not_called()
+
+    def test_station_identity_confirms_connection_without_claiming_idle_or_sending_controls(self):
+        class Station:
+            queries_sent=1
+            closed=False
+            def identity(self):return dict(ProductType='EC-110 Pro V1',FirmwareVersion='synthetic')
+            def close(self):self.closed=True
+        link=Station()
+        result=query_device('electrochemical_station',{'kind':'electrochemical'},check_port=False,
+                            station_factory=lambda *args:link)
+        self.assertEqual(result['state'],'connected');self.assertEqual(result['measurement_state'],'unknown')
+        self.assertEqual(result['product'],'EC-110 Pro V1');self.assertEqual(result['firmware'],'synthetic')
+        self.assertTrue(link.closed);self.assertEqual(result['motion_commands_sent'],0)
+        self.assertEqual(result['queries_sent'],1)
+
+    def test_unmatched_workstation_identity_is_not_reported_connected(self):
+        link=Mock(queries_sent=1)
+        link.identity.return_value={'ProductType':'Other instrument'}
+        result=query_device('electrochemical_station',{'kind':'electrochemical'},check_port=False,station_factory=lambda *args:link)
+        self.assertEqual(result['state'],'error');self.assertEqual(result['reason'],'identity_mismatch')
+        link.close.assert_called_once()
 
     def test_controller_execution_lock_prevents_all_device_queries(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -221,3 +243,30 @@ class RefreshApiTests(unittest.TestCase):
         _, status = self.request("GET","/api/status")
         self.assertTrue(all(device["hardware"]["stale"] for device in status["devices"]))
         self.assertTrue(all(device["state"]=="unknown" for device in status["devices"]))
+
+    def test_enabled_station_is_included_in_the_worker_and_api_hardware_results(self):
+        from pump_console.ec110 import station_policy
+        self.repo.station=station_policy(dict(enabled=True,port='/dev/synthetic-station'))
+        self.repo.device_status.policy['enabled']=True
+        def launch(*args,**kwargs):
+            targets=json.loads(kwargs['input'])['templates']
+            self.assertEqual(targets['electrochemical_station']['device']['kind'],'electrochemical')
+            result=result_for(targets)
+            station=next(item for item in result['devices'] if item['id']=='electrochemical_station')
+            station.update(state='connected',product='EC110 synthetic',firmware='synthetic',measurement_state='unknown')
+            return subprocess.CompletedProcess([],0,json.dumps(result))
+        self.repo.device_status.launcher=Mock(side_effect=launch)
+        code,result=self.request('POST','/api/status/refresh',{})
+        self.assertEqual(code,200);self.assertEqual(len(result['status']['devices']),6)
+        station=next(item for item in result['status']['devices'] if item['id']=='electrochemical_station')
+        self.assertEqual(station['state'],'connected');self.assertEqual(station['source'],'read_only_query')
+        self.assertEqual(station['hardware']['product'],'EC110 synthetic');self.assertFalse(station['hardware']['stale'])
+
+    def test_station_query_is_skipped_when_controller_is_running(self):
+        self.enable_fake()
+        from pump_console.ec110 import station_policy
+        self.repo.station=station_policy(dict(enabled=True,port='/dev/synthetic-station'))
+        with patch.object(self.repo.execution,'snapshot',return_value={'current':{'controller_alive':True}}):
+            code,result=self.request('POST','/api/status/refresh',{})
+        self.assertEqual(code,200);self.assertEqual(result['scan']['state'],'skipped')
+        self.repo.device_status.launcher.assert_not_called()

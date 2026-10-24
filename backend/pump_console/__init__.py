@@ -1,3 +1,3 @@
 """Authenticated laboratory workflows; serial access remains in execution workers."""
 
-__version__ = "0.15.0"
+__version__ = "0.15.1"

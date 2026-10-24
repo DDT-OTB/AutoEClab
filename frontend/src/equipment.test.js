@@ -32,7 +32,7 @@ const runningStatus=()=>{
 
 test('overview counts physical devices separately from the reserved workstation',()=>{
   const items=itemsFor(baseStatus());
-  assert.deepEqual(equipmentSummary(items),{total:5,reserved:1,working:0,idle:0,attention:0,unknown:5});
+  assert.deepEqual(equipmentSummary(items),{total:5,reserved:1,working:0,connected:0,idle:0,attention:0,unknown:5});
   assert.equal(items.find(item=>item.id==='electrochemical_station').activity.state,'not_integrated');
   assert.equal(items[0].name,'泵 1 · 超纯水');
 });
@@ -144,4 +144,13 @@ test('a busy pump may show a moving mechanism while untracked liquid flow remain
   assert.equal([...draw(true).matchAll(/instrument-working/g)].length,1);
   assert.doesNotMatch(draw(true),/pipe-working/);
   assert.doesNotMatch(draw(false),/instrument-working|pipe-working/);
+});
+test('workstation details show real connection identity, last query and historical data distinction',()=>{
+  const status=baseStatus();
+  status.devices.push({id:'electrochemical_station',port_present:true,port:'/dev/synthetic-station',baudrate:115200,hardware:{state:'connected',stale:false,product:'EC110 synthetic',firmware:'synthetic-v1',queried_at:'2026-10-24T09:00:00Z'}});
+  const items=equipmentDevices(templates,{electrochemical_station:{...cv,device:{...cv.device,execution_supported:true}}},status,true);
+  assert.equal(equipmentSummary(items).connected,1);
+  const html=render(EquipmentMonitor,{items,selectedItem:items.find(item=>item.id==='electrochemical_station'),fresh:true,role:'admin',measurement:{metadata:{id:'cv-synthetic',sequence_id:'synthetic',step_id:'cv',state:'completed',point_count:1},points:[[1,0,0,0]]}});
+  assert.match(html,/已连接/);assert.match(html,/EC110 synthetic/);assert.match(html,/synthetic-v1/);
+  assert.match(html,/最近设备查询/);assert.match(html,/历史测量记录/);assert.match(html,/不代表当前设备读数/);
 });

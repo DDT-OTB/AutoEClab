@@ -89,7 +89,7 @@ class LabRepository:
 
     def health(self):
         return {
-            "ok": True, "service": "pump-console", "version": "0.15.0",
+            "ok": True, "service": "pump-console", "version": "0.15.1",
             "debug_workflows_supported": True,
             "mandatory_preflight_block": True,
             "function_block_library_administrator_required": True,
@@ -457,19 +457,22 @@ class LabRepository:
                 "id": name, "label": config["label"], "kind": config["kind"],
                 "fluid": template["action"].get("fluid"),
                 "port": config["port"], "port_present": Path(config["port"]).exists(),
-                "state": activity["state"] if activity else hardware["state"] if queried else "unknown",
-                "activity": activity, "source": "controller_journal" if activity else "read_only_query" if queried else "unknown",
+                "state": activity["state"] if runtime['controller_alive'] and activity else hardware["state"] if queried else "unknown",
+                "activity": activity, "source": "controller_journal" if runtime['controller_alive'] and activity else "read_only_query" if queried else "unknown",
                 "hardware": hardware,
                 "last_observation": observed.get(name), "rpm": config.get("rpm"),
                 "speed_steps_s": config.get("speed_steps_s"), "channels": config.get("channels")})
         measurement = self.measurements.latest()
         if self.station['enabled']:
             activity = runtime['devices'].get('electrochemical_station')
+            hardware = scan['devices'].get('electrochemical_station')
+            queried = hardware is not None and not hardware['stale'] and runtime['controller_alive'] is not True
             devices.append(dict(id='electrochemical_station', label='EC110 electrochemical workstation', kind='electrochemical',
+                                port=self.station['port'],baudrate=self.station['baudrate'],
                                 port_present=Path(self.station['port']).exists(),
-                                state=activity['state'] if activity else 'unknown', activity=activity,
-                                source='controller_journal' if activity else 'configured',
-                                hardware=None, last_observation=None))
+                                state=activity['state'] if runtime['controller_alive'] and activity else hardware['state'] if queried else 'unknown', activity=activity,
+                                source='controller_journal' if runtime['controller_alive'] and activity else 'read_only_query' if queried else 'configured',
+                                hardware=hardware, last_observation=None))
         return {"devices": devices, "sampled_at": utc_now(), "mode": "controller_events", "runtime": runtime,
                 "measurement": measurement,
                 "device_scan": scan, "serial_commands_sent": scan.get("queries_sent", 0),
@@ -485,7 +488,10 @@ class LabRepository:
                     "health": self.health(), "runs": self.runs(), "templates": self.templates(),
                     "measurement_templates": measurement_templates(self.station), "safety_policy": self.safety_policy()}
         try:
-            scan = self.device_status.refresh(self.templates())
+            targets = self.templates()
+            if self.station['enabled']:
+                targets['electrochemical_station'] = {'device':{**self.station,'kind':'electrochemical'}}
+            scan = self.device_status.refresh(targets)
         except RefreshBusy:
             raise ApiError(409, "正在刷新设备状态，请稍候。", "status_refresh_busy")
         return {"scan": scan, "status": self.status(), "health": self.health(), "runs": self.runs(), "templates": self.templates(),

@@ -70,6 +70,60 @@ class ReadOnlySerial:
         self.serial.close()
 
 
+class ReadOnlyStation:
+    """Read EC110 identity only; never configure, stop or start a measurement."""
+    def __init__(self, name, config):
+        import serial
+        import termios
+        from .ec110 import FrameReader
+        self.queries_sent, self.exclusive = 0, False
+        self.serial = serial.Serial(port=None, baudrate=config['baudrate'], bytesize=8,
+            parity='N', stopbits=1, timeout=.05, write_timeout=1, exclusive=True,
+            xonxoff=False, rtscts=False, dsrdtr=False)
+        self.serial.port = config['port']
+        self.serial.dtr = False; self.serial.rts = False
+        try:
+            self.serial.open()
+            fcntl.ioctl(self.serial.fileno(), termios.TIOCEXCL)
+            self.exclusive = True
+            self.reader = FrameReader(self.serial)
+        except BaseException:
+            self.close()
+            raise
+
+    def identity(self):
+        from .ec110 import frame_bytes
+        self.serial.reset_input_buffer()
+        self.reader.buffer.clear()
+        packet = frame_bytes(0x03, b'', 0)
+        if self.serial.write(packet) != len(packet):
+            raise OSError('Incomplete station identity query')
+        self.queries_sent += 1
+        self.serial.flush()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            frame = self.reader.read(min(.2, max(0, deadline-time.monotonic())))
+            if frame and frame[:3] == (1, 0x04, 0):
+                payload = frame[3]
+                start, end = payload.find(b'{'), payload.rfind(b'}')
+                if start < 0 or end < start:
+                    raise ValueError('Invalid station identity response')
+                info = json.loads(payload[start:end+1])
+                if not isinstance(info, dict):
+                    raise ValueError('Invalid station identity response')
+                return info
+        raise TimeoutError('Station did not answer the identity query')
+
+    def close(self):
+        try:
+            if self.exclusive:
+                import termios
+                fcntl.ioctl(self.serial.fileno(), termios.TIOCNXCL)
+        finally:
+            self.exclusive = False
+            self.serial.close()
+
+
 def port_in_use(path, proc_root=Path("/proc")):
     target = Path(path).stat()
     for process in proc_root.iterdir():
@@ -88,10 +142,10 @@ def port_in_use(path, proc_root=Path("/proc")):
     return False
 
 
-def query_device(name, config, link_factory=ReadOnlySerial, check_port=True):
+def query_device(name, config, link_factory=ReadOnlySerial, check_port=True, station_factory=ReadOnlyStation):
     result = {"id": name, "state": "unknown", "source": "read_only_query", "queried_at": utc_now(),
               "queries_sent": 0, "motion_commands_sent": 0}
-    if config.get("kind") not in ("peristaltic", "valve", "syringe"):
+    if config.get("kind") not in ("peristaltic", "valve", "syringe", "electrochemical"):
         return {**result, "state": "unsupported", "reason": "unsupported_instrument"}
     link = None
     try:
@@ -103,8 +157,17 @@ def query_device(name, config, link_factory=ReadOnlySerial, check_port=True):
                 return {**result, "state": "error", "reason": "invalid_serial_node"}
             if port_in_use(port):
                 return {**result, "state": "in_use", "reason": "serial_port_in_use"}
-        link = link_factory(name, config)
-        if config["kind"] == "syringe":
+        link = (station_factory if config['kind']=='electrochemical' else link_factory)(name, config)
+        if config['kind']=='electrochemical':
+            info = link.identity()
+            product = str(info.get('ProductType',''))[:160]
+            if 'EC110' not in product.upper().replace('-','').replace(' ',''):
+                result.update(state='error',reason='identity_mismatch')
+            else:
+                result.update(state='connected',product=product,
+                    firmware=str(info.get('FirmwareVersion',''))[:160],
+                    connection_verified=True,measurement_state='unknown',query='ec110_identity')
+        elif config["kind"] == "syringe":
             reply = link.ascii("Q")
             result.update(state="error" if reply.error else "idle" if reply.ready else "busy",
                           error_code=reply.error)

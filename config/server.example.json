@@ -9,7 +9,7 @@
     "port": "",
     "max_potential_v": 3,
     "max_cycles": 499,
-    "dac_reference_mv": 120,
+    "dac_reference_mv": 10000,
     "step_time_unit_ns": 1000,
     "timing_verified": false
   },

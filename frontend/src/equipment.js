@@ -53,9 +53,10 @@ export function equipmentSummary(items) {
   return {
     total:physical.length, reserved:items.length-physical.length,
     working:physical.filter(item=>['executing','busy'].includes(item.activity.state)).length,
+    connected:physical.filter(item=>item.activity.state==='connected').length,
     idle:physical.filter(item=>['idle','waiting','completed'].includes(item.activity.state)).length,
     attention:physical.filter(item=>['error','no_response','port_missing','in_use','not_ready','unsupported'].includes(item.activity.state)).length,
-    unknown:physical.filter(item=>!['executing','busy','idle','waiting','completed','error','no_response','port_missing','in_use','not_ready','unsupported'].includes(item.activity.state)).length,
+    unknown:physical.filter(item=>!['executing','busy','connected','idle','waiting','completed','error','no_response','port_missing','in_use','not_ready','unsupported'].includes(item.activity.state)).length,
   };
 }
 

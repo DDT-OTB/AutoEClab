@@ -9,6 +9,6 @@ export function refreshMessage(scan, devices) {
   if (scan.state === 'failed') return '硬件状态读取未完成，请检查连接后重试。';
   if (scan.state === 'cached') return '设备状态刚刚已读取，当前显示最近结果。';
   if (scan.state === 'display_only') return '已更新状态显示；只读账户不会发起硬件查询。';
-  const replied = devices.filter(device => device.hardware && ['idle', 'busy'].includes(device.hardware.state)).length;
-  return '已检查 ' + devices.length + ' 台设备：' + replied + ' 台返回正常状态，' + (devices.length - replied) + ' 台需检查。';
+  const replied = devices.filter(device => device.hardware && !device.hardware.stale && (['idle','busy','connected','not_ready'].includes(device.hardware.state) || Number.isInteger(device.hardware.error_code))).length;
+  return '已检查 ' + devices.length + ' 台设备：' + replied + ' 台收到应答，' + (devices.length - replied) + ' 台未连接或读取失败。';
 }

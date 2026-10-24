@@ -1,13 +1,13 @@
 export function deviceActivity(device, runtime, fresh) {
   const activity = device?.activity;
   if (!fresh) return { state: 'unknown', label: '状态待确认' };
-  if (!['running', 'error'].includes(runtime?.state) || !activity) {
+  if (!['running', 'error'].includes(runtime?.state) || !activity || runtime?.controller_alive===false) {
     if (runtime?.controller_alive === true) return { state: 'unknown', label: '程序状态待确认' };
     const hardware = device?.hardware;
     if (!hardware) return { state: 'unknown', label: '状态待确认' };
     if (hardware.stale) return { state: 'unknown', label: '状态待刷新' };
     const labels = { idle: '空闲', busy: '工作中', not_ready: '未就绪', no_response: '无应答',
-      port_missing: '串口缺失', in_use: '串口被占用', error: '设备异常', unsupported: '暂不支持' };
+      port_missing: '串口缺失', in_use: '串口被占用', error: '设备异常', unsupported: '暂不支持',connected:'已连接' };
     return { ...hardware, source: 'hardware', label: labels[hardware.state] || '状态待确认' };
   }
   if (activity.state === 'error') return { ...activity, label: '执行异常' };

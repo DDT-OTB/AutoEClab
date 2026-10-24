@@ -9,7 +9,7 @@ import time
 
 DEFAULTS = dict(enabled=False, port='', baudrate=115200, max_potential_v=3.0,
                 max_cycles=499, max_duration_s=3600, max_raw_bytes=268435456,
-                dac_reference_mv=120.0, step_time_unit_ns=1000.0,
+                dac_reference_mv=10000.0, step_time_unit_ns=1000.0,
                 timing_verified=False, zero_i=0.0, cal_i=1.0, polarity_i=1,
                 cal_dac=1.0)
 RANGES = {1: (.25, 50), 2: (.1, 125), 3: (.01, 1250), 4: (.001, 12500),
@@ -74,6 +74,9 @@ def encode_cv(parameters, profile):
                             if math.isclose(limit, p['current_range_a'], rel_tol=1e-9)), None)
         if sensitivity is None:
             raise ValueError('固定电流量程须选择 EC110 支持的档位。')
+    # CV step registers use the command DAC's 20 V full span (65535 codes).
+    # The adaptive dac_vref_mv in 0x18 is only for decoding returned samples.
+    # Official ECProtocol::setDacLsbMv uses 65535 * cal_dac / 20000 codes/mV.
     lsb_v = profile['dac_reference_mv'] / 1000 / 32767.5 / profile['cal_dac']
     tick = profile['step_time_unit_ns'] * 1e-9
     # Public protocol bounds are 100..1000000 for the time register.
@@ -90,6 +93,7 @@ def encode_cv(parameters, profile):
                   sensitivity=sensitivity, iv_filter=0, potential_filter=0)
     result['timing_basis'] = dict(step_time_unit_ns=profile['step_time_unit_ns'],
                                   dac_reference_mv=profile['dac_reference_mv'],
+                                  reference_basis='command_dac_full_span',
                                   independently_verified=profile['timing_verified'],
                                   requested_scan_rate_v_s=p['scan_rate_v_s'])
     return result
@@ -299,6 +303,8 @@ class EC110Session:
                          else (parameters['lower_potential_v'], parameters['upper_potential_v']))
         targets = [value for _ in range(parameters['cycles']) for value in (first, second)] + [parameters['final_potential_v']]
         cursor = 0
+        first_data_elapsed = last_data_elapsed = None
+        timing_validation = None
         try:
             seq = self.send(0x05, payload)
             self.echo(0x06, seq, payload)
@@ -342,6 +348,9 @@ class EC110Session:
                     target_tolerance = max(.00015, quantum, abs(targets[cursor]) * .0015) if cursor < len(targets) else 0
                     if cursor < len(targets) and abs(voltage - targets[cursor]) <= target_tolerance:
                         cursor += 1
+                if rows:
+                    first_data_elapsed = rows[0]['time_s'] if first_data_elapsed is None else first_data_elapsed
+                    last_data_elapsed = rows[-1]['time_s']
                 writer.append(rows)
                 self.event('measurement_progress', device='electrochemical_station', measurement_id=writer.metadata['id'],
                            point_count=writer.metadata['point_count'], sample_count=writer.metadata['sample_count'],
@@ -350,6 +359,14 @@ class EC110Session:
                     break
             if not writer.metadata['point_count'] or cursor < len(targets):
                 raise StationError('CV 尚未完成全部设定电位段，保留已采集的部分数据。')
+            expected_scan = validate_scan_duration(parameters)
+            observed_scan = max(0, last_data_elapsed-first_data_elapsed)
+            tolerance = max(2.0, expected_scan*.2)
+            timing_validation = dict(expected_scan_s=expected_scan,observed_receive_span_s=observed_scan,
+                tolerance_s=tolerance,matches_requested_timing=abs(observed_scan-expected_scan)<=tolerance,
+                basis='server_receive_time',command_dac_reference_mv=self.profile['dac_reference_mv'])
+            if self.profile['timing_verified'] and not timing_validation['matches_requested_timing']:
+                raise StationError('返回数据的扫描时长与设定速率不匹配，已停止；请检查 DAC 步进和计时换算。')
             state = 'completed'
         except BaseException as exc:
             failure = exc
@@ -374,7 +391,9 @@ class EC110Session:
                             if failure is None:
                                 failure = exc
                 writer.finish(state, stop_confirmed=stopped, message=str(failure) if failure else None,
-                              targets_reached=cursor, target_count=len(targets))
+                              targets_reached=cursor, target_count=len(targets),
+                              completed_cycles=parameters['cycles'] if state=='completed' else None,
+                              timing_validation=timing_validation)
             finally:
                 self.writer = None
                 self.cleanup_mode = False
@@ -400,3 +419,8 @@ class EC110Session:
 def now_iso():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def validate_scan_duration(parameters):
+    from .measurement import validate_cv
+    return validate_cv(parameters)-parameters['quiet_time_s']

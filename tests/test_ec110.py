@@ -100,8 +100,28 @@ class EC110Tests(unittest.TestCase):
         self.assertEqual(e['keep_final'], 0)
         self.assertEqual(struct.unpack_from('>i', raw, 12)[0], -100)
         self.assertFalse(e['timing_basis']['independently_verified'])
-        self.assertAlmostEqual(e['single_step_dac_code'] * .12 / 32767.5 /
+        self.assertAlmostEqual(e['single_step_dac_code'] * 10 / 32767.5 /
                                (e['single_step_time_us'] * 1e-6), p['scan_rate_v_s'], delta=.001)
+
+    def test_command_dac_full_span_is_independent_of_decoded_sample_reference(self):
+        p={**parameters(), 'upper_potential_v':.5,'lower_potential_v':-.5,'initial_potential_v':.5,
+           'final_potential_v':.5,'cycles':3,'scan_rate_v_s':.1}
+        settings=station_policy(dict(enabled=True,port='/dev/pts/synthetic'))
+        encoded=encode_cv(p,settings)
+        self.assertEqual(encoded['single_step_dac_code'],1)
+        self.assertEqual(encoded['single_step_time_us'],3052)
+        self.assertEqual(encoded['sweep_segments'],7)
+        self.assertEqual(encoded['timing_basis']['reference_basis'],'command_dac_full_span')
+
+    def test_verified_timing_rejects_fast_data_even_when_all_voltage_targets_are_present(self):
+        self.session.profile['timing_verified']=True
+        self.session.open()
+        writer=self.writer()
+        with self.assertRaisesRegex(StationError,'扫描时长'):
+            self.session.measure(self.step,writer)
+        self.assertEqual(writer.metadata['state'],'failed')
+        self.assertTrue(writer.metadata['stop_confirmed'])
+        self.assertFalse(writer.metadata['timing_validation']['matches_requested_timing'])
 
     def test_full_protocol_voltage_range_is_available_without_small_window_cap(self):
         settings = station_policy(dict(enabled=True, port='/dev/pts/synthetic'))

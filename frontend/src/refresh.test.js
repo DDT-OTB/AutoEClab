@@ -29,3 +29,8 @@ test('skipped and failed refreshes never claim a successful hardware read', () =
   assert.match(refreshMessage({state:'skipped'},[]),/未发送硬件查询/);
   assert.match(refreshMessage({state:'failed'},[]),/未完成/);
 });
+test('station identity is counted as a reply and prior controller errors do not hide fresh readings',()=>{
+  assert.match(refreshMessage({state:'completed'},[{hardware:{state:'connected',stale:false}},{hardware:{state:'error',error_code:7,stale:false}},{hardware:{state:'port_missing',stale:false}}]),/2 台收到应答，1 台/);
+  const device={activity:{state:'error'},hardware:{state:'connected',stale:false}};
+  assert.equal(deviceActivity(device,{state:'error',controller_alive:false},true).label,'已连接');
+});
