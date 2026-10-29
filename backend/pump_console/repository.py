@@ -65,6 +65,7 @@ class LabRepository:
         self.topology = topology_mode(topology)
         self.measurements = MeasurementStore(self.data_root)
         self.lock = threading.RLock()
+        self._run_cache = {}
         self.monitoring = {"push_interval_seconds": 1, "stale_after_seconds": 15, **(monitoring or {})}
         self.runtime = RuntimeMonitor(self.logs_dir, self.monitoring["stale_after_seconds"])
         self.device_status = StatusRefresh(self.root, device_status)
@@ -90,7 +91,7 @@ class LabRepository:
     def health(self):
         from .syringe_batch import load_policy as syringe_policy
         return {
-            "ok": True, "service": "pump-console", "version": "0.15.5",
+            "ok": True, "service": "pump-console", "version": "0.16.0",
             "syringe_max_stroke_volume_ml": syringe_policy()['max_stroke_volume_ml'],
             "syringe_multi_stroke_supported": True,
             "syringe_homing_requires_verified_water": True,
@@ -408,11 +409,18 @@ class LabRepository:
         if not self.logs_dir.is_dir():
             return records
         paths = sorted(self.logs_dir.glob("run-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        selected = {str(path) for path in paths[:limit]}
+        with self.lock:
+            self._run_cache = {key:value for key,value in self._run_cache.items() if key in selected}
         for path in paths[:limit]:
             events = []
             try:
-                if path.stat().st_size > 4_000_000:
+                stat = path.stat();revision=(stat.st_ino,stat.st_size,stat.st_mtime_ns)
+                if stat.st_size > 4_000_000:
                     continue
+                with self.lock:cached=self._run_cache.get(str(path))
+                if cached and cached[0]==revision:
+                    records.append(cached[1]);continue
                 for line in path.read_text().splitlines():
                     try:
                         event = json.loads(line)
@@ -434,11 +442,12 @@ class LabRepository:
                     "finished_at": (complete or aborted or {}).get("time"),
                     "completed_steps": sum(e["event"] == "step_completed" for e in events),
                     "message": (aborted or {}).get("message"), "events": events[-80:]})
+                with self.lock:self._run_cache[str(path)]=(revision,records[-1])
             except OSError:
                 continue
         return records
 
-    def status(self):
+    def status(self, include_points=False):
         templates = self.templates()
         runs = self.runs()
         execution = self.execution.snapshot()
@@ -470,7 +479,7 @@ class LabRepository:
                 "hardware": hardware,
                 "last_observation": observed.get(name), "rpm": config.get("rpm"),
                 "speed_steps_s": config.get("speed_steps_s"), "channels": config.get("channels")})
-        measurement = self.measurements.latest()
+        measurement = self.measurements.latest(include_points=include_points)
         if self.station['enabled']:
             activity = runtime['devices'].get('electrochemical_station')
             hardware = scan['devices'].get('electrochemical_station')
@@ -486,6 +495,19 @@ class LabRepository:
                 "device_scan": scan, "serial_commands_sent": scan.get("queries_sent", 0),
                 "motion_commands_sent": None if self.execution.enabled else 0,
                 "hardware_execution_enabled": self.execution.enabled, "execution": execution}
+
+    def recover_measurements(self):
+        """Never reconcile while the controller or an on-demand serial query owns the lock."""
+        import fcntl
+        with self.measurements.db() as db:
+            pending=db.execute("SELECT 1 FROM datasets d WHERE state IN ('starting','running','finalizing') AND NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=d.id) LIMIT 1").fetchone()
+        if pending is None:return {'recovered':[],'skipped':[],'errors':[]}
+        lock_path=self.logs_dir/'execution.lock'
+        self.logs_dir.mkdir(parents=True,exist_ok=True)
+        with lock_path.open('a+') as handle:
+            try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:return {'deferred':True}
+            return self.measurements.recover_incomplete()
 
     def refresh_status(self):
         if self.device_status.policy["enabled"] is not True:

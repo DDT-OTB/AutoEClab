@@ -105,10 +105,15 @@ class CVExecutionTests(unittest.TestCase):
             if line.startswith('data: '): payload = json.loads(line[6:]); break
         response.close(); connection.close()
         self.assertIsNotNone(payload['measurement'])
-        self.assertTrue(payload['measurement']['points'])
+        self.assertNotIn('points',payload['measurement'])
+        self.assertTrue(payload['measurement']['chart_revision'])
+        code,detail=self.request('GET','/api/measurements/'+payload['measurement']['metadata']['id'],role='viewer')
+        self.assertEqual(code,200)
+        self.assertGreaterEqual(detail['measurement']['point_count'],1)
         self.wait_for(lambda: self.repo.execution.snapshot()['current']['state'] == 'completed')
         self.wait_for(lambda: not self.repo.execution.snapshot()['current']['controller_alive'])
         final = self.repo.measurements.latest()['metadata']
+        self.assertTrue(final['csv_ready']);self.assertEqual(final['storage_state'],'saved')
         self.assertEqual(final['point_count'], 3); self.assertEqual(final['sample_count'], 300)
         self.assertTrue(final['stop_confirmed'])
         self.assertEqual(self.pump.commands.count(0x47), 2)

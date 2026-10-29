@@ -76,3 +76,12 @@ test('loaded process preview is read-only while retaining every action and curre
   assert.doesNotMatch(html,/<(input|textarea)\b|step-actions|编辑第/);
   assert.match(html,/使用载入时的流程副本/);
 });
+test('execution results link is available for the actual run even after refreshing without a loaded design',()=>{
+  const html=render(RunWorkspace,{sequence:null,items:[],templates,shortNames:{},currentExecution:{run_id:'synthetic_run',sequence_id:'Synthetic run',controller_alive:false}});
+  assert.match(html,/本次实验全部结果/);assert.match(html,/最近一次运行/);assert.match(html,/synthetic_run/);
+});
+test('dataset and run result locations initialize the data workspace after a browser refresh',()=>{
+  const html=app('#data?run_id=20261029T123456123456Z-abcdefabcdef&measurement_id=cv-'+'a'.repeat(32));
+  assert.match(html,/aria-label="本次实验全部结果"/);assert.match(html,/20261029T123456123456Z-abcdefabcdef/);
+  assert.match(html,/cv-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+});

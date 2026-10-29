@@ -502,6 +502,7 @@ class ExecutionManager:
             'syringe_calibration_passed': bool(job.get('calibration_consumed_at')),
             'cell_preparation_passed': bool(job.get('cell_preparation_consumed_at')),
             'message': message, 'finished_at': worker.get('finished_at'), 'cleanup_failed': worker.get('cleanup_failed', False),
+            'completed_step_count': worker.get('completed_step_count'), 'active_step_id': worker.get('active_step_id'),
             'exit_code': worker.get('exit_code'), 'stop_requested': bool(job.get('stop_requested_at'))}
 
     def snapshot(self):
@@ -516,6 +517,25 @@ class ExecutionManager:
             return {'enabled': self.enabled, 'administrator_required': True,
                     'measurement_execution_enabled': self.enabled and self.repository.station['enabled'], 'current': current,
                     'syringe_calibration': {'required_before_each_experiment': True, 'last_homing': last_homing}}
+
+    def results(self, run_id):
+        folder,job=self._job(run_id)
+        snapshot=parse_json((folder/'snapshot.json').read_bytes())
+        current=self._summary(folder,job) if job['state']!='prepared' else {
+            'run_id':run_id,'sequence_id':job['sequence_id'],'state':'prepared','controller_alive':False}
+        try:worker=parse_json((folder/'worker.json').read_bytes())
+        except FileNotFoundError:worker={}
+        count=worker.get('completed_step_count');active=worker.get('active_step_id')
+        def step_state(step):
+            if current['state']=='completed' or (type(count) is int and step['index']<=count):return 'completed'
+            if step['id']==active:return 'running' if current['controller_alive'] else 'interrupted'
+            if current['state']=='prepared' or type(count) is int:return 'pending' if current['controller_alive'] or current['state']=='prepared' else 'not_run'
+            return 'unknown'
+        # Expose the frozen experiment and actions, never the private device/profile snapshot.
+        return {'execution':current,'sequence':snapshot['sequence'],'steps':[
+            {**{key:step[key] for key in ('id','index','device','action','operation','description','volume_ml','route','technique') if key in step},'state':step_state(step)}
+            for step in snapshot['plan']['steps']],
+            'measurement_count':self.repository.measurements.list(run_id=run_id,limit=1)['total']}
 
     def journal_path(self):
         with self.lock:

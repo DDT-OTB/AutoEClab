@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import sqlite3
 import time
+import threading
 from urllib.parse import unquote, urlsplit, parse_qs
 
 from .auth import AuthStore, COOKIE_NAME, SECURE_COOKIE_NAME
@@ -144,6 +145,8 @@ def make_server(host, port, repository, static_root, auth, access=None):
                         return self.json_response(200, repository.get_experiment(name))
                     if path == "/api/runs":
                         return self.json_response(200, {"runs": repository.runs()})
+                    if path.startswith('/api/results/'):
+                        return self.json_response(200, repository.execution.results(path.removeprefix('/api/results/')))
                     if path == "/api/execution":
                         return self.json_response(200, repository.execution.snapshot())
                     if path.startswith('/api/execution/preparations/'):
@@ -180,9 +183,9 @@ def make_server(host, port, repository, static_root, auth, access=None):
                 return {k: v[0] for k, v in query.items()}
             try:
                 if path == '/api/measurements':
-                    q = options({'query', 'state', 'limit', 'offset'})
+                    q = options({'query', 'state', 'limit', 'offset','run_id'})
                     return self.json_response(200, repository.measurements.list(q.get('query', ''), q.get('state', ''),
-                        int(q.get('limit', '50')), int(q.get('offset', '0'))))
+                        int(q.get('limit', '50')), int(q.get('offset', '0')),run_id=q.get('run_id','')))
                 parts = path.removeprefix('/api/measurements/').split('/')
                 if len(parts) == 1:
                     options(set())
@@ -193,6 +196,15 @@ def make_server(host, port, repository, static_root, auth, access=None):
                     return self.json_response(200, repository.measurements.points(parts[0], int(q.get('limit', '3000'))))
                 if len(parts) == 2 and parts[1] == 'download':
                     q = options({'format'})
+                    if q.get('format','csv')=='json':
+                        metadata=repository.measurements.get(parts[0])
+                        raw=(json.dumps(metadata,ensure_ascii=False,allow_nan=False)+'\n').encode()
+                        self.send_response(200)
+                        self.send_header('Content-Type','application/octet-stream')
+                        self.send_header('Content-Disposition','attachment; filename="'+metadata['id']+'.json"')
+                        self.send_header('Content-Length',str(len(raw)))
+                        self.security_headers();self.end_headers();self.wfile.write(raw)
+                        return
                     file, filename = repository.measurements.download(parts[0], q.get('format', 'csv'))
                     with file.open('rb') as handle:
                         length = os.fstat(handle.fileno()).st_size
@@ -467,12 +479,26 @@ def main():
                                config['hardware_execution_enabled'], config.get('automation'), config.get('electrochemical_station'), config.get('fluidic_topology'))
     static_root = (args.config.parent / config["static_root"]).resolve()
     server = make_server(config["host"], args.port or config["port"], repository, static_root, auth, access)
+    maintenance_stop=threading.Event()
+    def reconcile():
+        try:
+            result=repository.recover_measurements()
+            if result.get('recovered') or result.get('errors'):
+                print('Measurement reconciliation: '+json.dumps(result),flush=True)
+        except (OSError,ValueError,sqlite3.Error) as error:
+            print('Measurement reconciliation deferred: '+type(error).__name__,flush=True)
+    reconcile()
+    def maintenance():
+        while not maintenance_stop.wait(15):reconcile()
+    maintenance_thread=threading.Thread(target=maintenance,daemon=True,name='measurement-recovery')
+    maintenance_thread.start()
     print(f"Pump Console ready: http://{config['host']}:{server.server_port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        maintenance_stop.set()
         server.server_close()
 
 

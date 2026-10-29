@@ -84,12 +84,14 @@ def execute(lab_root, run_directory, run_id, runner_factory=None):
             if active_plan_step is not None or completed_step_count >= len(plan['steps']) or fields.get('step') != plan['steps'][completed_step_count]:
                 raise ValueError('Controller step does not match the validated sequence')
             active_plan_step = fields['step']
+            publish(completed_step_count=completed_step_count,active_step_id=active_plan_step['id'])
             if operation=='calibrate_syringe':publish(phase='selecting_water' if fields['step']['device']=='valve' else 'homing')
         if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'step_completed':
             if active_plan_step is None or fields.get('id') != active_plan_step['id']:
                 raise ValueError('Controller completion does not match the active step')
             completed_step_count += 1
             active_plan_step = None
+            publish(completed_step_count=completed_step_count,active_step_id=None)
         if operation in ('sequence','debug_sequence','calibrate_syringe') and kind == 'sequence_completed' and completed_step_count != len(plan['steps']):
             raise ValueError('Controller reported completion before all validated steps finished')
         if operation=='calibrate_syringe' and kind=='syringe_water_source_verified':

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 import math
+import fcntl
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -258,6 +259,69 @@ class MeasurementDataApiTests(unittest.TestCase):
         self.assertEqual(status['measurement']['metadata']['id'], self.dataset)
         self.assertEqual(status['measurement']['metadata']['point_count'], 100)
         self.assertFalse(status['hardware_execution_enabled'])
+        self.assertNotIn('points',status['measurement'])
+        self.assertNotIn('trend_segments',status['measurement'])
+        self.assertEqual(status['measurement']['chart_revision'],status['measurement']['metadata']['version'])
+        code,detail=self.request('GET','/api/measurements/'+self.dataset)
+        self.assertEqual(code,200);self.assertTrue(detail['chart']['points'])
+
+    def test_run_filter_returns_only_measurements_from_the_requested_run(self):
+        self.assertEqual(self.request('GET','/api/measurements?run_id=synthetic-run')[1]['total'],1)
+        self.assertEqual(self.request('GET','/api/measurements?run_id=another-run')[1]['total'],0)
+        self.assertEqual(self.request('GET','/api/measurements?run_id=../private')[0],400)
+
+    def test_run_results_exposes_frozen_actions_and_measurement_count_without_device_snapshot(self):
+        self.repo.execution.enabled=True
+        sequence=dict(schema_version=3,mode='debug',initial_cell_volume_ml=0,id='synthetic_results',description='Synthetic result context',
+            blocks=[dict(id='first',description='First block',steps=[dict(device='peristaltic_1',operation='inject',fluid='water',volume_ml=1)])])
+        prepared=self.repo.execution.prepare(sequence,'test_admin')
+        sequence['blocks'][0]['steps'][0]['volume_ml']=9
+        writer=self.repo.measurements.create(prepared['run_id'],'synthetic_results',synthetic_step(),'test_admin',{})
+        writer.append(synthetic_rows());writer.finish('completed')
+        code,result=self.request('GET','/api/results/'+prepared['run_id'])
+        self.assertEqual(code,200);self.assertEqual(result['measurement_count'],1)
+        self.assertEqual(result['sequence']['blocks'][0]['steps'][0]['volume_ml'],1)
+        self.assertEqual(result['steps'][0]['state'],'pending')
+        self.assertNotIn('devices',result);self.assertNotIn('station',result)
+        self.assertEqual(self.request('GET','/api/results/'+prepared['run_id'],headers={'Cookie':''})[0],401)
+        self.assertEqual(self.request('GET','/api/results/invalid-run')[0],400)
+        self.auth.create_user('results_viewer','Synthetic viewer password 2026',role='viewer',temporary=False)
+        self.token,session=self.auth.login('results_viewer','Synthetic viewer password 2026','127.0.0.1');self.csrf=session['csrf_token']
+        self.assertEqual(self.request('GET','/api/results/'+prepared['run_id'])[0],200)
+
+    def test_recovery_never_runs_while_a_controller_owns_the_execution_lock(self):
+        writer=self.repo.measurements.create('active-run','active',synthetic_step(),'test_admin',{})
+        try:
+            self.repo.logs_dir.mkdir(parents=True,exist_ok=True)
+            with (self.repo.logs_dir/'execution.lock').open('a+') as handle:
+                fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.assertTrue(self.repo.recover_measurements()['deferred'])
+        finally:writer.finish('failed')
+
+    def test_json_download_uses_committed_metadata_even_if_the_derived_file_is_stale(self):
+        path=self.repo.measurements.folder(self.dataset)/'metadata.json'
+        path.write_text('{"stale":true}')
+        code,result=self.request('GET','/api/measurements/'+self.dataset+'/download?format=json')
+        self.assertEqual(code,200)
+        current=json.loads(result);self.assertEqual(current['point_count'],100);self.assertEqual(current['id'],self.dataset)
+        self.assertEqual(path.read_text(),'{"stale":true}')
+
+    def test_status_does_not_read_or_rebuild_chart_points(self):
+        with patch.object(self.repo.measurements,'points',side_effect=AssertionError('Heavy chart path')):
+            self.assertEqual(self.request('GET','/api/status')[0],200)
+
+    def test_recent_run_journals_are_parsed_only_when_they_change(self):
+        self.repo.logs_dir.mkdir(parents=True,exist_ok=True)
+        path=self.repo.logs_dir/'run-synthetic-cache.jsonl'
+        path.write_text(json.dumps(dict(event='sequence_started',sequence='synthetic',time='2026-01-01T00:00:00+00:00'))+'\n')
+        original=Path.read_text;reads=[]
+        def tracked(p,*args,**kwargs):
+            if p==path:reads.append(p)
+            return original(p,*args,**kwargs)
+        with patch.object(Path,'read_text',tracked):
+            self.repo.runs();self.repo.runs();self.assertEqual(len(reads),1)
+            with path.open('a') as handle:handle.write(json.dumps(dict(event='sequence_completed',time='2026-01-01T00:00:01+00:00'))+'\n')
+            self.assertEqual(self.repo.runs()[0]['state'],'completed');self.assertEqual(len(reads),2)
 
     def test_admin_delete_requires_version_and_removes_every_read_route(self):
         item = self.repo.measurements.get(self.dataset)

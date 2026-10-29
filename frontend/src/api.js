@@ -60,7 +60,8 @@ export function createApi(base = '', { fetcher = (...args) => fetch(...args), on
     }),
     runs: () => request('/api/runs'),
     measurements: (filters={}) => request('/api/measurements?'+new URLSearchParams(Object.entries(filters).filter(([,value])=>value!=='' && value!==undefined))),
-    measurement: id => request('/api/measurements/'+encodeURIComponent(id)),
+    measurement: (id,options={}) => request('/api/measurements/'+encodeURIComponent(id),options),
+    runResults: id => request('/api/results/'+encodeURIComponent(id)),
     deleteMeasurement: (id,expected_version) => request('/api/measurements/'+encodeURIComponent(id),{method:'DELETE',body:JSON.stringify({expected_version})}),
     downloadMeasurement: async (id,format='csv') => {
       const response=await fetcher(base+'/api/measurements/'+encodeURIComponent(id)+'/download?format='+encodeURIComponent(format),{credentials:'same-origin'});

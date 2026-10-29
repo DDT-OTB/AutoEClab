@@ -1,12 +1,12 @@
-import React,{useMemo,useRef,useState} from 'react';
+import React,{memo,useMemo,useRef,useState} from 'react';
 import {Activity,Download,LineChart} from 'lucide-react';
-import {chartData,chartDomain,displayTrend,downloadBlob,measurementStates,numberText,smoothPath} from './measurements.js';
+import {chartData,chartDomain,displayTrend,downloadBlob,measurementStates,numberText,smoothPath,storageText} from './measurements.js';
 
 function tick(value) {
   if(value!==0 && (Math.abs(value)<.001 || Math.abs(value)>=10000))return value.toExponential(1);
   return Number(value.toPrecision(4)).toString();
 }
-export function TraceChart({points=[],trendSegments=[],kind='cv',title,exportName='cv'}) {
+export const TraceChart=memo(function TraceChart({points=[],trendSegments=[],kind='cv',title,exportName='cv'}) {
   const svg=useRef(null),[hover,setHover]=useState(null),[view,setView]=useState('smooth');
   const data=useMemo(()=>chartData(points,kind),[points,kind]);
   const xd=useMemo(()=>chartDomain(data.map(p=>p.x)),[data]);
@@ -50,7 +50,7 @@ export function TraceChart({points=[],trendSegments=[],kind='cv',title,exportNam
       {kind==='time' && <p className="measurement-data-note">同一数据帧的多个点共享接收时刻，竖直线段不代表仪器电流在同一瞬间全部跳变。</p>}
     </div>}
   </section>;
-}
+});
 
 export default function MeasurementCharts({metadata,points=[],trendSegments=[],live=false,fresh=true,onOpen}) {
   if(!metadata)return null;
@@ -60,6 +60,7 @@ export default function MeasurementCharts({metadata,points=[],trendSegments=[],l
     {!fresh && live && <p className="measurement-warning" role="status">实时连接待恢复，当前显示最后接收的数据。</p>}
     <div className="measurement-metrics"><div><span>有效数据点</span><strong>{numberText(metadata.point_count,0)}</strong><small>每点为 100 个原始样本的均值</small></div><div><span>原始采样数</span><strong>{numberText(metadata.sample_count,0)}</strong><small>原始帧单独保存</small></div><div><span>电位范围</span><strong>{numberText(metadata.statistics?.potential_v_min,4)} ~ {numberText(metadata.statistics?.potential_v_max,4)}<small> V</small></strong><small>从返回 DAC CODE 换算</small></div><div><span>停止回读</span><strong>{['starting','running'].includes(state)?'采集中':metadata.stop_confirmed?'已确认':'待确认'}</strong><small>{metadata.instrument?.product || 'EC110'} {metadata.instrument?.firmware || ''}</small></div></div>
     {metadata.message && <p className="measurement-warning" role="status">{metadata.message}</p>}
+    <p className="measurement-data-note">{storageText(metadata)}</p>
     <div className="measurement-chart-grid"><TraceChart points={points} trendSegments={trendSegments} title="CV · 电位—电流" kind="cv" exportName={metadata.id}/><TraceChart points={points} trendSegments={trendSegments} title="时间—电流" kind="time" exportName={metadata.id}/></div>
     <p className="measurement-data-note">图形为保留端点与峰值的抽样显示，完整均值数据可下载 CSV。电流为名义换算值；时间为服务器接收时间，受分包与缓冲影响。</p>
   </section>;

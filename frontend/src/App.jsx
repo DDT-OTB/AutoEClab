@@ -14,7 +14,7 @@ import {BlockPalette,BlockCanvas,BlockInspector} from './WorkflowBuilder.jsx';
 import BlockLibraryManager from './BlockLibraryManager.jsx';
 import WorkspaceNav,{PlanWorkspaceTabs} from './WorkspaceNav.jsx';
 import RunWorkspace from './RunWorkspace.jsx';
-import {emptyRunSequence,runSnapshot,workspacePage,workspacePages} from './workspace.js';
+import {emptyRunSequence,runSnapshot,workspacePage,workspacePages,workspaceLocation,workspaceHash} from './workspace.js';
 import {alignPreflight,defaultPreflight,isPreflight} from './preflight.js';
 import {flattenSequence,workflowToEditor,importBlock,exportBlock,instantiateBlock,setWorkflowMode} from './workflow.js';
 import {isDebug,hasPreparation} from './workflowMode.js';
@@ -59,7 +59,9 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   const [catalog, setCatalog] = useState([]);
   const catalogRequest = useRef(0);
   const [runs, setRuns] = useState([]);
-  const [selectedDataset,setSelectedDataset]=useState(null);
+  const initialLocation=()=>workspaceLocation(initialPage ?? (typeof window==='undefined'?'':window.location.hash));
+  const [selectedDataset,setSelectedDataset]=useState(()=>initialLocation().measurementId);
+  const [selectedRunId,setSelectedRunId]=useState(()=>initialLocation().runId);
   const [draft, setDraft] = useState(emptyDraft);
   const [base, setBase] = useState({ id: null, version: null });
   const [dirty, setDirty] = useState(false);
@@ -168,9 +170,17 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
   async function openManagedExperiment(id) {
     if(await loadExperiment(id)) {setPlanView('editor');navigate('plans');}
   }
-  function navigate(value) {
+  function navigate(value,{runId=selectedRunId,measurementId=selectedDataset}={}) {
     const id=workspacePage(value);setActiveNav(id);
-    if(window.location.hash!=='#'+id)window.history.pushState(null,'','#'+id);
+    if(id==='data'){setSelectedRunId(runId);setSelectedDataset(measurementId);}
+    const hash=workspaceHash(id,{runId,measurementId});
+    if(window.location.hash!==hash)window.history.pushState(null,'',hash);
+  }
+  function openResults(runId,measurementId=null) {
+    setModal(null);navigate('data',{runId,measurementId});
+  }
+  function selectDataset(measurementId) {
+    navigate('data',{runId:selectedRunId,measurementId});
   }
   async function loadRunExperiment(id) {
     setBusy('load-run');setError('');
@@ -217,7 +227,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
     return () => clearInterval(timer);
   }, []);
   useEffect(()=>{
-    const changed=()=>setActiveNav(workspacePage(window.location.hash));
+    const changed=()=>{const location=workspaceLocation(window.location.hash);setActiveNav(location.page);setSelectedDataset(location.measurementId);setSelectedRunId(location.runId);};
     window.addEventListener('popstate',changed);window.addEventListener('hashchange',changed);
     return()=>{window.removeEventListener('popstate',changed);window.removeEventListener('hashchange',changed);};
   },[]);
@@ -394,12 +404,12 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       <div className="content">
         {error && <div className="error-banner" role="alert"><Unplug size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
         {activeNav!=='run' && (status.execution?.current?.can_stop || status.runtime?.controller_alive) && <button className="workspace-running-link" onClick={()=>navigate('run')}><span className={'status-dot '+(fresh?'green':'gray')}/>查看当前实验运行状态<ArrowUpRight size={14}/></button>}
-        {activeNav==='run' && <RunWorkspace sequence={runSequence} preparation={runPreparation && sequenceKey(runPreparation.sequence)===sequenceKey(executionSequence)?runPreparation:null} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex}/>}
+        {activeNav==='run' && <RunWorkspace sequence={runSequence} preparation={runPreparation && sequenceKey(runPreparation.sequence)===sequenceKey(executionSequence)?runPreparation:null} source={runSource} plan={runPlan} items={catalog} busy={busy} onLoad={loadRunExperiment} onImport={()=>{setImportText('');setModal('import-run');}} onPlans={()=>{setPlanView('files');navigate('plans');}} onEdit={editLoadedRun} errors={runErrors} templates={actionTemplates} shortNames={shortNames} runningIndex={runningIndex} currentExecution={status.execution?.current} onResults={openResults}/>}
         <AutomationControl visible={activeNav==='run'} hasSequence={!!runSequence} templates={actionTemplates} user={user} sequence={executionSequence} status={status} health={health} fresh={fresh} errors={runErrors} measurementCount={runMeasurementCount} busy={busy} names={names} onPlan={setRunPlan} onProgress={setRunPreparation} onRestore={value=>{setRunSequence(structuredClone(value.sequence));setRunSource({kind:'restored',id:null,label:'恢复的前置流程'});setRunPlan(value.preview);}} onRefresh={refresh} onStarted={(value,run_id)=>setSubmittedRun({key:sequenceKey(value),run_id})}/>
         {activeNav==='run' && <><LiveRun runtime={status.runtime} fresh={fresh} streaming={streaming} names={names}/>
-          <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role} onOpenMeasurement={id=>{setSelectedDataset(id);navigate('data');}}/>
+          <EquipmentOverview templates={templates} measurementTemplates={measurementTemplates} status={status} fresh={fresh} streaming={streaming} onRefresh={refreshAll} refreshing={refreshing} role={user?.role} onOpenMeasurement={(id,runId)=>openResults(runId || status.measurement?.metadata?.run_id,id)}/>
         </>}
-        {activeNav==='data' && <DataManagement user={user} selectedId={selectedDataset} onSelect={setSelectedDataset} liveMeasurement={status.measurement}/>}
+        {activeNav==='data' && <DataManagement user={user} selectedId={selectedDataset} onSelect={selectDataset} liveMeasurement={status.measurement} runId={selectedRunId} onRun={openResults} liveStatus={status} fresh={fresh}/>}
         {activeNav==='plans' && <section className="plans-workspace" aria-label="实验方案工作区">
           <PlanWorkspaceTabs view={planView} onChange={setPlanView} dirty={dirty}/>
           <div id="plan-workspace-panel" role="tabpanel" aria-label={planView==='files'?'方案文件管理':'实验流程编辑'}>
@@ -467,7 +477,7 @@ export default function App({ user, onLogout, onChangePassword, loggingOut,initi
       {['import','import-block','import-run'].includes(modal) ? <><p className="modal-description">{modal==='import-block'?'导入一个功能块并追加到当前实验，不替换已有内容。':modal==='import-run'?'载入本次待运行的完整流程，不会替换实验设计草稿。':'导入完整实验；兼容旧版动作序列和新版功能块方案。'} JSON 配置使用英文。</p><label className="file-import-input"><FileJson size={16}/><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" onChange={importFile} aria-label={modal==='import-block'?'选择功能块 JSON 文件':'选择实验方案 JSON 文件'}/></label><textarea className="import-area" autoFocus value={importText} onChange={event => setImportText(event.target.value)} placeholder={modal==='import-block'?'{"schema_version":1,"kind":"function_block","id":"my_block","description":"...","steps":[]}':'{"schema_version":3,"id":"my_experiment","description":"...","blocks":[]}'} aria-label="导入 JSON 文本" /><button className="primary-button" onClick={importSequence}>{modal==='import-block'?'追加功能块':modal==='import-run'?'载入运行流程':'载入编辑器'}<ArrowUpRight size={15} /></button></> :
         modal === 'connection' ? <><div className="connection-summary"><span className={'status-dot ' + (connected ? 'green' : 'red')} /><strong>{connected ? 'React 前端已连接 Python 后端' : '后端连接待恢复'}</strong></div><dl className="connection-details"><dt>服务</dt><dd>{health?.service || '—'}</dd><dt>工作模式</dt><dd>{health?.hardware_execution_enabled?'管理员自动化执行 / 离线预览':'配置 / 离线预览'}</dd><dt>当前来源</dt><dd>{window.location.origin}</dd><dt>实验数据</dt><dd>{health?.lab_root || '—'}</dd><dt>状态采样</dt><dd>控制程序事件，每秒推送；断线自动重连与轮询</dd><dt>设备状态读取</dt><dd>管理员手动触发，只发送白名单查询指令</dd><dt>硬件执行</dt><dd>{health?.hardware_execution_enabled?'仅管理员可确认启动方案、请求停止；不开放任意串口指令':'启动、停止、初始化及移动均禁用'}</dd></dl><button className="outline-button" onClick={refreshAll} disabled={refreshing || status.device_scan?.in_progress}><RefreshCw size={15} />{refreshing ? '正在刷新…' : '刷新全部状态'}</button></> :
         modal === 'accounts' ? <AccountManagement user={user}/> :
-        <><div className="modal-description">{modal.run?.sequence_id} · {modal.run?.completed_steps} 步完成</div><div className="run-events">{modal.run?.events.filter(item => ['step_started', 'step_completed', 'sequence_aborted', 'sequence_completed'].includes(item.event)).map((item, index) => <div key={index}><span className="status-dot gray" /><span>{timeText(item.time)}</span><strong>{item.event === 'step_started' ? item.step.description : item.event === 'step_completed' ? item.id + ' 已完成' : item.message || item.event}</strong></div>)}</div></>}
+        <><div className="modal-description">{modal.run?.sequence_id} · {modal.run?.completed_steps} 步完成</div>{(/^run-[0-9]{8}T[0-9]{12}Z-[a-f0-9]{12}$/).test(modal.run?.id || '') && <button className="outline-button" onClick={()=>openResults(modal.run.id.slice(4))}>查看本次实验全部结果<ArrowUpRight size={14}/></button>}<div className="run-events">{modal.run?.events.filter(item => ['step_started', 'step_completed', 'sequence_aborted', 'sequence_completed'].includes(item.event)).map((item, index) => <div key={index}><span className="status-dot gray" /><span>{timeText(item.time)}</span><strong>{item.event === 'step_started' ? item.step.description : item.event === 'step_completed' ? item.id + ' 已完成' : item.message || item.event}</strong></div>)}</div></>}
     </section></div>}
   </div>;
 }

@@ -23,6 +23,8 @@ CSV_COLUMNS = ['index', 'received_elapsed_s', 'potential_v_nominal', 'current_a_
 CHART_SAMPLER = 'uniform_index_extrema_v1'
 CHART_POINT_LIMIT = 3000
 TREND_METHOD = 'full_data_branch_bucket_mean_v1'
+ACTIVE_DATASET_STATES = ('starting', 'running', 'finalizing')
+TERMINAL_DATASET_STATES = ('completed', 'stopped', 'failed', 'imported', 'interrupted')
 
 
 class MeasurementBusyError(ValueError):
@@ -47,14 +49,20 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def private_json(path, value):
+def private_json(path, value, durable=False):
     raw = (json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n').encode()
     temporary = path.with_name(path.name + '.' + secrets.token_hex(4) + '.tmp')
     try:
         fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, 'wb') as handle:
             handle.write(raw)
+            if durable:
+                handle.flush(); os.fsync(handle.fileno())
         os.replace(temporary, path)
+        if durable:
+            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(descriptor)
+            finally: os.close(descriptor)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -206,6 +214,13 @@ class MeasurementStore:
                     time_s REAL NOT NULL, potential_v REAL NOT NULL, current_a REAL NOT NULL,
                     PRIMARY KEY(dataset_id, point_index)
                 );
+                CREATE TABLE IF NOT EXISTS point_attributes (
+                    dataset_id TEXT NOT NULL, point_index INTEGER NOT NULL,
+                    adc_mean REAL, dac_code INTEGER, sensitivity INTEGER,
+                    current_gain INTEGER, dac_vref_mv REAL, sample_count INTEGER NOT NULL,
+                    PRIMARY KEY(dataset_id, point_index),
+                    FOREIGN KEY(dataset_id, point_index) REFERENCES points(dataset_id, point_index)
+                ) WITHOUT ROWID;
                 CREATE TABLE IF NOT EXISTS measurement_deletions (
                     dataset_id TEXT PRIMARY KEY REFERENCES datasets(id), deleted_at TEXT NOT NULL,
                     deletion_id TEXT NOT NULL, deleted_by TEXT NOT NULL, version TEXT NOT NULL
@@ -245,12 +260,17 @@ class MeasurementStore:
                         point_count=0, sample_count=0, raw_frame_count=0,
                         nominal_conversion=True, time_basis='server_receive_time',
                         stop_confirmed=False, message=None, statistics={}, provenance=provenance)
+        metadata.update(storage_format_version=2, storage_state='recording', csv_ready=False)
         with self.db() as db:
             db.execute('INSERT INTO datasets(id,run_id,sequence_id,step_id,created_at,state,metadata) VALUES (?,?,?,?,?,?,?)',
                        (dataset_id, run_id, sequence_id, step['id'], metadata['created_at'],
                         metadata['state'], json.dumps(metadata, ensure_ascii=False, allow_nan=False)))
         private_json(folder / 'metadata.json', metadata)
         return DatasetWriter(self, metadata)
+
+    def recover_incomplete(self, grace_seconds=10):
+        from .measurement_recovery import recover_incomplete
+        return recover_incomplete(self, grace_seconds)
 
     def get(self, dataset_id):
         self.folder(dataset_id)
@@ -260,9 +280,11 @@ class MeasurementStore:
             raise FileNotFoundError('Measurement does not exist')
         return with_version(json.loads(row['metadata']))
 
-    def list(self, query='', state='', limit=50, offset=0):
-        if not isinstance(query, str) or len(query) > 160 or state not in ('', 'starting', 'running', 'completed', 'stopped', 'failed', 'imported'):
+    def list(self, query='', state='', limit=50, offset=0, run_id=''):
+        if not isinstance(query, str) or len(query) > 160 or state not in ('', *ACTIVE_DATASET_STATES, *TERMINAL_DATASET_STATES):
             raise ValueError('Invalid measurement filter')
+        if not isinstance(run_id,str) or (run_id and not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',run_id)):
+            raise ValueError('Invalid run ID')
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 100000:
             raise ValueError('Invalid measurement page')
         where, values = ['NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=datasets.id)'], []
@@ -272,6 +294,8 @@ class MeasurementStore:
             values.extend([pattern] * 3)
         if state:
             where.append('state=?'); values.append(state)
+        if run_id:
+            where.append('run_id=?'); values.append(run_id)
         condition = ' WHERE ' + ' AND '.join(where) if where else ''
         with self.db() as db:
             count = db.execute('SELECT count(*) FROM datasets' + condition, values).fetchone()[0]
@@ -284,7 +308,7 @@ class MeasurementStore:
         if type(limit) is not int or not 24 <= limit <= 10000:
             raise ValueError('Chart point limit must be between 24 and 10000')
         live = self.folder(dataset_id) / 'live.json'
-        if metadata['state'] in ('starting', 'running') and live.is_file() and not live.is_symlink():
+        if metadata['state'] in ACTIVE_DATASET_STATES and live.is_file() and not live.is_symlink():
             snapshot = json.loads(live.read_text())
             return dict(points=thin_points(snapshot['points'], limit), point_columns=POINT_COLUMNS,
                         total_points=snapshot['point_count'], updated_at=snapshot['updated_at'],
@@ -320,13 +344,15 @@ class MeasurementStore:
             while len(self._chart_cache)>8:self._chart_cache.popitem(last=False)
         return chart
 
-    def latest(self):
+    def latest(self, include_points=True):
         with self.db() as db:
             row = db.execute('SELECT metadata FROM datasets WHERE NOT EXISTS (SELECT 1 FROM measurement_deletions x WHERE x.dataset_id=datasets.id) ORDER BY created_at DESC, id DESC LIMIT 1').fetchone()
         if row is None:
             return None
         metadata = with_version(json.loads(row['metadata']))
-        if metadata['state'] not in ('starting','running'):
+        if not include_points:
+            return dict(metadata=metadata, chart_revision=metadata['version'], total_points=metadata['point_count'])
+        if metadata['state'] not in ACTIVE_DATASET_STATES:
             try:chart=self.points(metadata['id'])
             except FileNotFoundError:return None
             return dict(metadata=metadata,points=chart['points'],point_columns=POINT_COLUMNS,
@@ -346,8 +372,8 @@ class MeasurementStore:
         names = {'csv': 'points.csv', 'json': 'metadata.json', 'raw': 'frames.jsonl'}
         if kind not in names:
             raise ValueError('Unsupported data download format')
-        if metadata['state'] in ('starting', 'running') and kind != 'json':
-            raise ValueError('Please wait until acquisition stops before downloading data')
+        if kind != 'json' and (metadata['state'] in ACTIVE_DATASET_STATES or (kind=='csv' and metadata.get('csv_ready') is False)):
+            raise MeasurementBusyError('数据仍在保存或需要恢复，暂不能下载完整文件。')
         path = self.folder(dataset_id) / names[kind]
         if path.is_symlink() or not path.is_file():
             raise FileNotFoundError('Measurement file is unavailable')
@@ -374,7 +400,7 @@ class MeasurementStore:
                     raise MeasurementConflictError('测量记录已更新，请刷新后重新确认删除。')
                 if row['deleted_at'] is not None:
                     return dict(deleted=True, already_deleted=True, id=dataset_id, trash_id=row['deletion_id'])
-                if metadata['state'] not in ('completed', 'stopped', 'failed', 'imported'):
+                if metadata['state'] not in TERMINAL_DATASET_STATES:
                     raise MeasurementBusyError('正在采集或状态待确认的数据不能删除，请等待采集结束。')
                 if not folder.is_dir():
                     raise FileNotFoundError('Measurement files are unavailable')
@@ -439,7 +465,7 @@ class DatasetWriter:
 
     def _open(self, name):
         fd = os.open(self.folder / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        return os.fdopen(fd, 'w', encoding='utf-8', newline='', buffering=1)
+        return os.fdopen(fd, 'w', encoding='utf-8', newline='', buffering=1 if name=='frames.jsonl' else 65536)
 
     def frame(self, direction, version, command, seq, payload, max_bytes=268435456):
         value = json.dumps(dict(time=now(), direction=direction, version=version,
@@ -453,24 +479,32 @@ class DatasetWriter:
     def append(self, rows):
         if not rows:
             return
-        points = []
+        # Do not advance the writer's counters until the same transaction has
+        # committed both samples, conversion attributes and authoritative metadata.
+        metadata = deepcopy(self.metadata)
+        points, attributes = [], []
         for row in rows:
-            index = self.metadata['point_count'] + 1
+            index = metadata['point_count'] + 1
             t, potential, current = row['time_s'], row['potential_v'], row['current_a']
             if not all(type(x) in (float, int) and math.isfinite(x) for x in (t, potential, current)):
                 raise ValueError('Non-finite measurement point')
             points.append([index, t, potential, current])
-            self.metadata['point_count'] = index
-            self.metadata['sample_count'] += row.get('sample_count', 100)
-            self.csv_writer.writerow([index, t, potential, current, row.get('adc_mean'), row.get('dac_code'),
-                row.get('sensitivity'), row.get('current_gain'), row.get('dac_vref_mv'), row.get('sample_count', 100)])
-            stats = self.metadata['statistics']
+            metadata['point_count'] = index
+            metadata['sample_count'] += row.get('sample_count', 100)
+            attributes.append([metadata['id'],index,row.get('adc_mean'),row.get('dac_code'),
+                row.get('sensitivity'),row.get('current_gain'),row.get('dac_vref_mv'),row.get('sample_count',100)])
+            stats = metadata['statistics']
             for field, value in [('potential_v', potential), ('current_a', current), ('time_s', t)]:
                 stats[field + '_min'] = min(stats.get(field + '_min', value), value)
                 stats[field + '_max'] = max(stats.get(field + '_max', value), value)
+        metadata['updated_at'] = now()
         with self.store.db() as db:
             db.executemany('INSERT INTO points VALUES (?,?,?,?,?)',
-                           [(self.metadata['id'], *point) for point in points])
+                           [(metadata['id'], *point) for point in points])
+            db.executemany('INSERT INTO point_attributes VALUES (?,?,?,?,?,?,?,?)',attributes)
+            db.execute('UPDATE datasets SET metadata=? WHERE id=?',
+                       (json.dumps(metadata,ensure_ascii=False,allow_nan=False),metadata['id']))
+        self.metadata = metadata
         if not hasattr(self,'sampler'):self.sampler=StreamingTrace()
         if not hasattr(self,'trend'):self.trend=StreamingTrend()
         self.sampler.append(points)
@@ -480,25 +514,32 @@ class DatasetWriter:
     def publish(self, force=False, **fields):
         if self.closed:
             raise ValueError('Measurement writer is closed')
-        self.metadata.update(fields)
         if not force and time.monotonic() - self.last_publish < .4:
             return
-        self.last_publish = time.monotonic()
+        metadata = deepcopy(self.metadata);metadata.update(fields)
         self.trace=self.sampler.points() if hasattr(self,'sampler') else []
-        self.metadata['updated_at'] = now()
-        raw = json.dumps(self.metadata, ensure_ascii=False, allow_nan=False)
+        metadata['updated_at'] = now()
+        raw = json.dumps(metadata, ensure_ascii=False, allow_nan=False)
         with self.store.db() as db:
             db.execute('UPDATE datasets SET state=?,metadata=? WHERE id=?',
-                       (self.metadata['state'], raw, self.metadata['id']))
+                       (metadata['state'], raw, metadata['id']))
+        self.metadata=metadata
+        self.last_publish = time.monotonic()
         private_json(self.folder / 'metadata.json', self.metadata)
         private_json(self.folder / 'live.json', dict(points=self.trace,
             point_count=self.metadata['point_count'], updated_at=self.metadata['updated_at'],sampling=CHART_SAMPLER,
             **(self.trend.chart() if hasattr(self,'trend') else dict(trend_segments=[],trend_method=TREND_METHOD))))
 
     def finish(self, state, stop_confirmed=False, message=None, **fields):
+        from .measurement_recovery import build_csv
         try:
-            self.publish(force=True, state=state, stop_confirmed=stop_confirmed,
-                         message=message, finished_at=now(), **fields)
+            self.publish(force=True, state='finalizing',storage_state='finalizing',csv_ready=False,
+                         stop_confirmed=stop_confirmed,message=message,target_state=state,**fields)
+            for handle in (self.raw,self.csv):
+                handle.flush();os.fsync(handle.fileno());handle.close()
+            sealed=build_csv(self.store,self.metadata)
+            self.publish(force=True,state=state,message=message,finished_at=now(),**sealed)
+            private_json(self.folder/'metadata.json',self.metadata,durable=True)
         finally:
             try:
                 self.raw.close()

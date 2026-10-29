@@ -1,6 +1,16 @@
-export const measurementStates={starting:'准备采集',running:'正在采集',completed:'已完成',stopped:'已停止',failed:'采集异常',imported:'已导入'};
+export const measurementStates={starting:'准备采集',running:'正在采集',finalizing:'正在保存',completed:'已完成',stopped:'已停止',failed:'采集异常',interrupted:'异常中断',imported:'已导入'};
+export const activeMeasurementStates=['starting','running','finalizing'];
+export function storageText(metadata) {
+  if(!metadata)return '';
+  if(metadata.storage_state==='error')return '保存异常 · 等待恢复已提交数据';
+  if(metadata.state==='interrupted')return metadata.csv_ready?'异常中断 · 已恢复已提交数据':'异常中断 · 保存状态待核对';
+  if(metadata.state==='finalizing')return '正在保存 · 生成完整 CSV 并校验';
+  if(metadata.csv_ready===true)return '数据已保存 · '+numberText(metadata.point_count,0)+' 个均值点';
+  if(metadata.storage_state==='recording')return '已提交 '+numberText(metadata.point_count,0)+' 个均值点 · 结束后生成 CSV';
+  return '历史数据记录';
+}
 export function canDeleteMeasurement(user,record) {
-  return user?.role==='admin' && !!record?.version && ['completed','stopped','failed','imported'].includes(record.state);
+  return user?.role==='admin' && !!record?.version && ['completed','stopped','failed','imported','interrupted'].includes(record.state);
 }
 export function chartData(points=[],kind='cv') {
   if(!Array.isArray(points))return [];
